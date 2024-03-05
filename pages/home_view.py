@@ -2,6 +2,12 @@ from typing import Union
 import flet as ft
 from pages.Router import Router, DataStrategyEnum
 from State import State
+import cv2 
+import numpy as np
+import socket
+import pyautogui
+import threading
+import base64
 
 def HomeView(page: ft.Page):
     def handle_change_start(e):
@@ -15,7 +21,19 @@ def HomeView(page: ft.Page):
     def handle_change_end(e):
         slider_status.value = "Finished sliding"
         page.update()
-    
+    def capture_screen(container: ft.Container):
+        while True:
+            print("Capturing screen")
+            screen = pyautogui.screenshot()
+            frame = np.array(screen)
+            frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+            frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
+        
+            container.content = ft.Image(src_base64=frame_base64, width=800, height=500)
+            container.update()
+    def on_Iniciar_transmision_click(e):
+        thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
+        thread.start()
     content = ft.Column(
             [
                 ft.Row(
@@ -24,6 +42,8 @@ def HomeView(page: ft.Page):
                       bgcolor=ft.colors.BLACK,
                       width=800,
                       height=500,
+                      # content=ft.Image(width=800, height=500)
+
                     )
                 ], 
                 alignment=ft.MainAxisAlignment.CENTER
@@ -115,7 +135,8 @@ def HomeView(page: ft.Page):
                         ft.Column([
                           ft.TextButton(
                             "Iniciar transmisión",
-                            width=400
+                            width=400,
+                            on_click=on_Iniciar_transmision_click
                           ),
                           ft.TextButton(
                             "Iniciar grabación",
