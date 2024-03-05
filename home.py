@@ -1,18 +1,17 @@
 import flet as ft
+from pages.navigation import router
+from navbar.app_bar import AppBar
 
 def main(page: ft.Page):
-    page.title = "home"
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
-    txt = ft.TextField(value="Hello world!", text_align=ft.TextAlign.RIGHT, width=120)
-
+    page.theme_mode = "dark"
+    page.title = "SICOM Studio"
+    page.appbar = AppBar(page)
+    page.on_route_change = router.route_change
+    router.page = page
     page.add(
-        ft.Row(
-            [
-                txt,
-            ],
-            alignment=ft.MainAxisAlignment.CENTER,
-        )
+        router.body
     )
+    page.go('/')
 
-ft.app(target=main)
+ft.app(target=main, assets_dir="assets")
