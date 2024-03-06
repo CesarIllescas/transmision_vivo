@@ -84,8 +84,10 @@ def HomeView(page: ft.Page):
                     ft.Container(
                       bgcolor=ft.colors.BLACK,
                       width=800,
-                      height=500,
-                    ),
+                      height=400,
+                      # content=ft.Image(width=800, height=500)
+
+                    )
                 ], 
                 alignment=ft.MainAxisAlignment.CENTER
             ),
@@ -125,7 +127,8 @@ def HomeView(page: ft.Page):
                           drop_list,
                           server_input,
                           transmition_key,
-                        ])
+                        ],
+                        scroll=True)
                       ]),
                       border_radius=10,
                     ),
