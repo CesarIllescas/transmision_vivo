@@ -10,6 +10,35 @@ import threading
 import base64
 
 def HomeView(page: ft.Page):
+    
+    #Componentes con su value favor de no mover
+    def on_change_drop_list(e):
+      page.update()
+      
+    def on_change_server_input(e):
+      page.update()
+    
+    drop_list = ft.Dropdown(
+      width=380,
+      options=[
+        ft.dropdown.Option("1","Grabar pantalla"),
+        ft.dropdown.Option("2","Grabar desde cámara"),
+      ],
+      on_change=on_change_drop_list
+    )
+    
+    server_input = ft.TextField(
+      width=380,
+      label="Servidor",
+      on_change=on_change_server_input
+    )
+    
+    transmition_key = ft.TextField(
+      width=380,
+      label="Clave de transmisión",
+      on_change=on_change_server_input
+    )
+  
     def handle_change_start(e):
         slider_status.value = "Sliding"
         page.update()
@@ -32,6 +61,8 @@ def HomeView(page: ft.Page):
             container.content = ft.Image(src_base64=frame_base64, width=800, height=500)
             container.update()
     def on_Iniciar_transmision_click(e):
+      #Asi obtienes los valores de los componentes
+        print(server_input.value, transmition_key.value, drop_list.value)
         thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
         thread.start()
     content = ft.Column(
@@ -77,22 +108,13 @@ def HomeView(page: ft.Page):
                     content=ft.Container(
                       content=ft.Column([
                         ft.ListTile(
-                          title=ft.Text("Recursos"),
+                          title=ft.Text("Configuración de transmisión"),
                           bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([
-                          ft.TextButton(
-                            "Imagen",
-                            icon="image"
-                          ),
-                          ft.TextButton(
-                            "Captura de pantalla",
-                            icon="camera"
-                          ),
-                          ft.TextButton(
-                            "Video",
-                            icon="video_call"
-                          ),
+                          drop_list,
+                          server_input,
+                          transmition_key,
                         ])
                       ]),
                       border_radius=10,
