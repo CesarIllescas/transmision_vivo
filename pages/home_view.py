@@ -4,10 +4,10 @@ from pages.Router import Router, DataStrategyEnum
 from State import State
 import cv2 
 import numpy as np
-import socket
 import pyautogui
 import threading
 import base64
+import subprocess
 
 def HomeView(page: ft.Page):
     
@@ -21,12 +21,16 @@ def HomeView(page: ft.Page):
     drop_list = ft.Dropdown(
       width=380,
       options=[
-        ft.dropdown.Option("1","Grabar pantalla"),
-        ft.dropdown.Option("2","Grabar desde cámara"),
+        ft.dropdown.Option('1',"Grabar pantalla"),
+        ft.dropdown.Option('2',"Grabar desde cámara"),
       ],
       on_change=on_change_drop_list
     )
-    
+    img = ft.Image(
+          src="statics/images/black.png",
+          border_radius=ft.border_radius.all(20)
+      )
+
     server_input = ft.TextField(
       width=380,
       label="Servidor",
@@ -38,7 +42,7 @@ def HomeView(page: ft.Page):
       label="Clave de transmisión",
       on_change=on_change_server_input
     )
-  
+
     def handle_change_start(e):
         slider_status.value = "Sliding"
         page.update()
@@ -50,31 +54,55 @@ def HomeView(page: ft.Page):
     def handle_change_end(e):
         slider_status.value = "Finished sliding"
         page.update()
-    def capture_screen(container: ft.Container, capture_source='webcam'):
-      if capture_source == 'webcam':
-          capture = cv2.VideoCapture(0)
-      elif capture_source == 'screen':
-          capture = None 
+    def capture_screen(container: ft.Container):
+      if drop_list.value == '1':
+          print(drop_list.value)
+
+          capture = None
       else:
-          capture = cv2.VideoCapture("otra_camara")
+          capture = cv2.VideoCapture(0)
+          capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+          capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+      rtmp_url = f'{server_input.value}/{transmition_key.value}'
+      # fps = int(capture.get(cv2.CAP_PROP_FPS))
+      # width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+      # height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+      command = ['ffmpeg',
+                '-y',
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',
+                '-s', "{}x{}".format(1920, 1080),
+                '-r', str(30),
+                '-i', '-',
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-preset', 'ultrafast',
+                '-f', 'flv',
+                rtmp_url]
+
+      p = subprocess.Popen(command, stdin=subprocess.PIPE)
 
       while True:
-          print("Capturando pantalla")
-          if capture_source == 'webcam':
-              ret, frame = capture.read()
-          else:
-              # Captura la pantalla usando pyautogui
+          if drop_list.value == '1':
+              print("Capturando pantalla")
               screen = pyautogui.screenshot()
               frame = np.array(screen)
-
-          frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+              frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+          else:
+              ret, frame = capture.read()
+          try:
+            p.stdin.write(frame.tobytes())
+          except:
+            break
+          ret, frame_bytes = cv2.imencode('.png', frame)
           frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
-      
-          container.content = ft.Image(src_base64=frame_base64, width=800, height=500)
-          container.update()
+
+          img.src_base64 = frame_base64
+          page.update()
     def on_Iniciar_transmision_click(e):
-      #Asi obtienes los valores de los componentes
-        print(server_input.value, transmition_key.value, drop_list.value)
         thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
         thread.start()
     content = ft.Column(
@@ -85,8 +113,7 @@ def HomeView(page: ft.Page):
                       bgcolor=ft.colors.BLACK,
                       width=800,
                       height=400,
-                      # content=ft.Image(width=800, height=500)
-
+                      content=img
                     )
                 ], 
                 alignment=ft.MainAxisAlignment.CENTER
