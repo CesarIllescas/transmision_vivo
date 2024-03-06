@@ -21,16 +21,28 @@ def HomeView(page: ft.Page):
     def handle_change_end(e):
         slider_status.value = "Finished sliding"
         page.update()
-    def capture_screen(container: ft.Container):
-        while True:
-            print("Capturing screen")
-            screen = pyautogui.screenshot()
-            frame = np.array(screen)
-            frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
-            frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
-        
-            container.content = ft.Image(src_base64=frame_base64, width=800, height=500)
-            container.update()
+    def capture_screen(container: ft.Container, capture_source='webcam'):
+      if capture_source == 'webcam':
+          capture = cv2.VideoCapture(0)
+      elif capture_source == 'screen':
+          capture = None 
+      else:
+          capture = cv2.VideoCapture("otra_camara")
+
+      while True:
+          print("Capturando pantalla")
+          if capture_source == 'webcam':
+              ret, frame = capture.read()
+          else:
+              # Captura la pantalla usando pyautogui
+              screen = pyautogui.screenshot()
+              frame = np.array(screen)
+
+          frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+          frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
+      
+          container.content = ft.Image(src_base64=frame_base64, width=800, height=500)
+          container.update()
     def on_Iniciar_transmision_click(e):
         thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
         thread.start()
@@ -42,9 +54,7 @@ def HomeView(page: ft.Page):
                       bgcolor=ft.colors.BLACK,
                       width=800,
                       height=500,
-                      # content=ft.Image(width=800, height=500)
-
-                    )
+                    ),
                 ], 
                 alignment=ft.MainAxisAlignment.CENTER
             ),

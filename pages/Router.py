@@ -45,4 +45,4 @@ class Router:
         return self.data.get(key)
     
     def update(self):
-        return self.body.update()
+        self.body.update()
