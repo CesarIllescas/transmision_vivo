@@ -65,6 +65,7 @@ def HomeView(page: ft.Page):
           capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
       rtmp_url = f'{server_input.value}/{transmition_key.value}'
+      # rtmp_url = "rtmp://212.227.239.4:1935/live/blytSOoF1"
       # fps = int(capture.get(cv2.CAP_PROP_FPS))
       # width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
       # height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -74,9 +75,10 @@ def HomeView(page: ft.Page):
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
                 '-pix_fmt', 'bgr24',
-                '-s', "{}x{}".format(1920, 1080),
-                '-r', str(30),
-                '-i', '-',
+                '-s', "1920x1080",
+               '-use_wallclock_as_timestamps', '1',
+                 '-i', 
+                  '-',
                 '-c:v', 'libx264',
                 '-pix_fmt', 'yuv420p',
                 '-preset', 'ultrafast',
@@ -87,7 +89,7 @@ def HomeView(page: ft.Page):
 
       while True:
           if drop_list.value == '1':
-              print("Capturando pantalla")
+              # print("Capturando pantalla")
               screen = pyautogui.screenshot()
               frame = np.array(screen)
               frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
