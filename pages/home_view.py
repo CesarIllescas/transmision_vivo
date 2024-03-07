@@ -8,7 +8,7 @@ import pyautogui
 import threading
 import base64
 import subprocess
-
+import selectors
 def HomeView(page: ft.Page):
     
     #Componentes con su value favor de no mover
@@ -55,22 +55,49 @@ def HomeView(page: ft.Page):
         slider_status.value = "Finished sliding"
         page.update()
     def capture_screen(container: ft.Container):
-      if drop_list.value == '1':
-          print(drop_list.value)
-
-          capture = None
-      else:
-          capture = cv2.VideoCapture(0)
-          capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-          capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-
-      rtmp_url = f'{server_input.value}/{transmition_key.value}'
-      # rtmp_url = "rtmp://212.227.239.4:1935/live/blytSOoF1"
+      # rtmp_url = f'{server_input.value}/{transmition_key.value}'
+        rtmp_url = "rtmp://212.227.239.4:1935/live/blytSOoF1"
+        ffmpeg_command = [
+          'ffmpeg',
+          '-f', 'gdigrab',
+          '-framerate', '30',
+          # '-offset_x', '10',
+          # '-offset_y', '20',
+          '-video_size', '1920x1080',
+          '-show_region', '1',
+          '-i', 'desktop',
+          '-c:v', 'libx264',
+              '-pix_fmt', 'yuv420p',
+              '-preset', 'ultrafast',
+              '-f', 'flv',
+              rtmp_url
+        ]
+        p = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        
       # fps = int(capture.get(cv2.CAP_PROP_FPS))
       # width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
       # height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        while True:
+              
+              print("Capturando pantalla")
+              frame = p.stdout.read(1920 * 1080 * 3)
+              try:
+                p.stdin.write(frame.tobytes())
+              except:
+                break
+              ret, frame_bytes = cv2.imencode('.png', frame)
+              frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
 
-      command = ['ffmpeg',
+              img.src_base64 = frame_base64
+              page.update()
+    def stream_webcam(container: ft.Container):
+          # rtmp_url = f'{server_input.value}/{transmition_key.value}'
+          rtmp_url = "rtmp://212.227.239.4:1935/live/blytSOoF1"
+
+          capture = cv2.VideoCapture(0)
+          capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+          capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+          command = ['ffmpeg',
                 '-y',
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
@@ -85,28 +112,26 @@ def HomeView(page: ft.Page):
                 '-f', 'flv',
                 rtmp_url]
 
-      p = subprocess.Popen(command, stdin=subprocess.PIPE)
-
-      while True:
-          if drop_list.value == '1':
-              # print("Capturando pantalla")
-              screen = pyautogui.screenshot()
-              frame = np.array(screen)
-              frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-          else:
+          p = subprocess.Popen(command, stdin=subprocess.PIPE)
+          while True:
               ret, frame = capture.read()
-          try:
-            p.stdin.write(frame.tobytes())
-          except:
-            break
-          ret, frame_bytes = cv2.imencode('.png', frame)
-          frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
+              try:
+                p.stdin.write(frame.tobytes())
+              except:
+                break
+              ret, frame_bytes = cv2.imencode('.png', frame)
+              frame_base64 = base64.b64encode(frame_bytes).decode('utf-8')
 
-          img.src_base64 = frame_base64
-          page.update()
+              img.src_base64 = frame_base64
+              page.update()
     def on_Iniciar_transmision_click(e):
-        thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
-        thread.start()
+        if drop_list.value == '1':
+          thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
+          thread.start()
+        else:
+          thread = threading.Thread(target=stream_webcam, args=(content._get_children()[0]._get_children()[0],))
+          thread.start()
+           
     content = ft.Column(
             [
                 ft.Row(
