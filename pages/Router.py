@@ -45,4 +45,8 @@ class Router:
         return self.data.get(key)
     
     def update(self):
-        self.body.update()
+        self.page.add(self.body)
+        
+    def set_overlay(self, overlay):
+        self.page.overlay.append(overlay)
+        self.page.update()

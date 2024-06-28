@@ -3,7 +3,6 @@ from pages.navigation import router
 from navbar.app_bar import AppBar
 
 def main(page: ft.Page):
-
     page.theme_mode = "dark"
     page.title = "SICOM Studio"
     page.appbar = AppBar(page)
