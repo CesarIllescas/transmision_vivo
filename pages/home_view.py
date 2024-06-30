@@ -1,7 +1,7 @@
 from typing import Union
 import flet as ft
 from pages.Router import Router, DataStrategyEnum
-from State import State
+from State import global_state, State
 import cv2
 import numpy as np
 import threading
@@ -16,11 +16,21 @@ import platform
 import re
 import queue
 
+audio_process = None
+
+
 def HomeView(page: Router):
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
     YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2/{}"
     TWITCH_RTMP_URL = "rtmp://live.twitch.tv/app/{}"
     X_RTMP_URL = "rtmp://X.com/"
+    global curtain_array
+    curtain_array = []
+    global video_added
+    video_added = False
+    global stream_video_added
+    stream_video_added = False
+
     def on_change_drop_list(e):
       print(audio_drop_list.value)
       
@@ -37,18 +47,14 @@ def HomeView(page: Router):
     
     global curtain
     curtain = False
-    curtain_video_cap = None
-    stream_video_cap = None
+  
     frame_queue = queue.Queue(maxsize=10)  # Cola para los frames en vivo, con tamaño máximo
-   
+    global process 
+    process = None
     platforms = ["Facebook", "Youtube", "X", "Otro"]
     platform_drop_list = [ft.Checkbox(label=platform, height=45, on_change=on_change_checkbox) for platform in platforms]
     platform_Inputs = [ft.TextField(label=platform, height=45, width=230, disabled=True) for platform in platforms]
-    # curtain_row = ft.Image(src="C:\\Users\\ilcj_\\OneDrive\\Imágenes\\Capturas de pantalla\\Captura de pantalla (1).png"
-    #                       ,width=200,
-    #                       height=50,
-    #                       border_radius=ft.border_radius.all(20))
-    
+
     img_live = ft.Image(
           src="statics/images/black.png",
           border_radius=ft.border_radius.all(20)
@@ -58,23 +64,6 @@ def HomeView(page: Router):
           src="statics/images/black.png",
           border_radius=ft.border_radius.all(20)
       )
-    server_input = ft.TextField(
-      width=380,
-      label="Servidor",
-      on_change=on_change_server_input
-    )
-
-    transmition_key = ft.TextField(
-      width=380,
-      label="Clave de transmisión",
-      on_change=on_change_server_input
-    )
-
-    curtain_path = ft.TextField(
-      width=380,
-      label="Ruta del video",
-      on_change=on_change_server_input
-    )
 
     custom_server = ft.TextField(
       width=380,
@@ -94,9 +83,9 @@ def HomeView(page: Router):
     def handle_change_end(e):
         slider_status.value = "Finished sliding"
         page.update()
+        
+    
     def stream_webcam(container: ft.Container):
-          global curtain
-          global current_curtain_selected
           streams = ""
           i = 1
           for checkbox in platform_drop_list:
@@ -112,36 +101,38 @@ def HomeView(page: Router):
                 elif checkbox.label == "Otro":
                     streams += f"{select}{custom_server.value}{key}|"
                 i += 1
+          command = [ 
+                'ffmpeg',
+                '-y',
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-pixel_format', 'bgr24',
+                '-s', '640x480',
+                '-framerate', '30',
+                '-i', '-',
+                '-f', 'dshow',
+                '-i', f'audio={audio_drop_list.value}',
+                '-map', '0:v',
+                '-map', '1:a',
+                '-c:v', 'libx264',
+                '-c:a', 'aac',
+                '-preset', 'ultrafast',
+                '-tune', 'zerolatency',
+                '-b:v', '1500k',
+                '-maxrate', '1500k',
+                '-bufsize', '512k',
+                '-pix_fmt', 'yuv420p', 
+                '-r', '30',
+                '-g', '60',
+                '-threads', '8',
+                '-flags', '+global_header',
+                '-f', 'tee',
+                streams
+            ]
+          process = subprocess.Popen(command, stdin=subprocess.PIPE)
+          global curtain
+          global current_curtain_selected
 
-            command = [ 
-          'ffmpeg',
-          '-y',
-          '-f', 'rawvideo',
-          '-vcodec', 'rawvideo',
-          '-pixel_format', 'bgr24',
-          '-s', '640x480',
-          '-framerate', '30',
-          '-i', '-',
-          '-f', 'dshow',
-          '-i', f'audio={audio_drop_list.value}',
-          '-map', '0:v',
-          '-map', '1:a',
-          '-c:v', 'libx264',
-          '-c:a', 'aac',
-          '-preset', 'ultrafast',
-          '-tune', 'zerolatency',
-          '-b:v', '1500k',
-          '-maxrate', '1500k',
-          '-bufsize', '512k',
-          '-pix_fmt', 'yuv420p', 
-          '-r', '30',
-          '-g', '60',
-          '-threads', '8',
-          '-flags', '+global_header',
-          '-f', 'tee',
-          streams
-      ]
-          p = subprocess.Popen(command, stdin=subprocess.PIPE)
           global video_thread_started
           if not video_thread_started:
                   video_thread_started = True
@@ -151,8 +142,15 @@ def HomeView(page: Router):
             frame = frame_queue.get()
             if frame is None:
                 break
-            p.stdin.write(frame)
-  
+            process.stdin.write(frame)
+            
+            # if curtain:
+            #     audio_process = switch_to_video_audio()
+            #     process.stdin.write(audio_process.stdout.read())
+            # else:
+            #     silent_audio = b'\x00' * (44100 * 2 * 2)
+            #     process.stdin.write(silent_audio)
+
     def capture_screen(container: ft.Container):
         youtube_key = "yj7j-fuzw-7370-6956-38t8"
         rtmp_url="rtmp://a.rtmp.youtube.com/live2/{}" 
@@ -209,43 +207,43 @@ def HomeView(page: Router):
     video_thread_started = False
     curtain_thread_started = False
     def show_curtain(e):
-      global curtain  
+      global curtain
       global curtain_thread_started
-      
+      global stream_video_added
+      global current_curtain_selected
+      global process
+      # global curtain_thread
       if curtain == False:
+          print("Mostrando cortina")
           curtain = True
-          # video.show_controls = False
-          # live_container.content = video
-          # live_container.update()
+          live_container.content = stream_video
+          live_container.update()
+          # page.update()
+          if stream_video_added:
+            stream_video.playlist_remove(0)
+          stream_video.playlist_add(ft.VideoMedia(current_curtain_selected))
+          live_container.update()
+          print(stream_video.playlist)
+          stream_video.jump_to(0)
+          live_container.update()
+          live_container.content = stream_video
+          live_container.update()
+          page.update()
+          live_container.update()
+          stream_video_added = True
       else:
           curtain = False
-          video.show_controls = True
           preview_container.content = video
+          live_container.content = img_live
+          live_container.update()
           preview_container.update()
           
       if not curtain_thread_started and curtain:
         curtain_thread_started = True
         curtain_thread = threading.Thread(target=capture_curtain_video)
         curtain_thread.start()
-    def handle_platform_selection(checkbox_values):
-      selected_platforms = [platforms[i] for i, value in enumerate(checkbox_values) if value]
-      # Elimina los campos de entrada de clave anteriores
-      transmition_key.clear_content()
-      # Agrega un campo de entrada de clave para cada plataforma seleccionada
-      for platform in selected_platforms:
-          transmition_key.add_content(ft.TextInput(
-              placeholder=f"Ingrese la clave para {platform}",
-              on_change=handle_key_change,
-          ))
-
-    def pick_files_result(e: ft.FilePickerResultEvent):
-        if e.files:
-          for file in e.files:
-            video.playlist_add(ft.VideoMedia(file.path))
-        video.jump_to(0)
-        page.update()
+        
     def show_file(e: ft.FilePickerResultEvent):
-      curtain_array = []
       for file in e.files:
         if file.path.lower().endswith(('.png', '.jpg', '.jpeg')):
           image = ft.Image(src=file.path,
@@ -284,15 +282,21 @@ def HomeView(page: Router):
           
         curtain_array.append(cont)
       images = ft.Row(curtain_array)
+      
       curtain_container.content = images
       curtain_container.update()
     def click(e):
       global current_curtain_selected
+      global video_added
+      if video_added:
+        video.playlist_remove(0)
       current_curtain_selected = e.control.key
-      print(current_curtain_selected)
+      
       video.playlist_add(ft.VideoMedia(e.control.key))
       video.next()
       page.update()
+      video_added = True
+
     def generate_video_thumbnail(file_path):
         cap = cv2.VideoCapture(file_path)
         ret, frame = cap.read()
@@ -334,7 +338,7 @@ def HomeView(page: Router):
       return video_devices, audio_devices
     
     def play_audio(audio_device):
-      subprocess.run(['ffplay', '-nodisp', '-autoexit', '-f', 'dshow', '-i', f'audio={audio_device}'])
+      subprocess.run(['ffplay', '-nodisp', '-autoexit', '-f', 'dshow', '-i', f'audio={audio_device}'])  
 
     def capture_curtain_video():
         global curtain_video_cap
@@ -352,37 +356,68 @@ def HomeView(page: Router):
     def capture_camera_video():
         global stream_video_cap
         stream_video_cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        # stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         while True:
             ret, camera_frame = stream_video_cap.read()
             if not ret:
                 print("No se pudo leer el fotograma de la cámara")
                 break
             
-            frame_queue.put(camera_frame.tobytes())
+            camera_frame = cv2.resize(camera_frame, (640, 480))
+            ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
+            camera_frame_base64 = base64.b64encode(camera_frame_bytes).decode('utf-8')
 
-                # #camera_frame = cv2.resize(camera_frame, (640, 480))
-            # print(f"Camera frame shape: {camera_frame.shape}, dtype: {camera_frame.dtype}")
-            # ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
-            # camera_frame_base64 = base64.b64encode(camera_frame_bytes).decode('utf-8')
-
-            # if curtain and camera_frame_base64:
-            #     if img_preview:
-            #         img_preview.src_base64 = camera_frame_base64
-            #     if preview_container:
-            #         preview_container.content = img_preview
-            #         preview_container.update()
-            # else:
-            #     if img_live and camera_frame_base64:
-            #         img_live.src_base64 = camera_frame_base64
-            #         live_container.content = img_live
-            #         img_live.update()
-            #     if live_container:
-            #         live_container.update()
-            # frame_queue.put(camera_frame.tobytes())
+            if curtain and camera_frame_base64:
+                if img_preview:
+                    img_preview.src_base64 = camera_frame_base64
+                if preview_container:
+                    preview_container.content = img_preview
+                    #page.update()
+                    streaming_and_preview_row.update()
+                    preview_container.update()
+            else:
+                if img_live and camera_frame_base64:
+                    img_live.src_base64 = camera_frame_base64
+                    live_container.content = img_live
+                    #page.update()
+                    img_live.update()
+                if live_container:
+                    live_container.update()
+                frame_queue.put(camera_frame.tobytes())
+          
+          
+            #frame_queue.put(camera_frame.tobytes())
 
                 # time.sleep(1 / 30.0)  # Control de la velocidad de fotogramas
+
+    def switch_to_video_audio():
+        command = [
+        'ffmpeg',
+        '-i', current_curtain_selected,
+        '-vn',  # No video
+        '-f', 'lavfi',
+        '-i', 'anullsrc=r=44100:cl=stereo',
+        '-filter_complex',
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[a]',  # Mix audio inputs
+        '-map', '[a]',
+        '-f', 'wav',
+        'pipe:1'
+    ]
+        return subprocess.Popen(command, stdout=process.stdin)
+
+    def switch_to_microphone(process):
+        global audio_process
+        if audio_process:
+            audio_process.terminate()
+        null_audio_command = [
+            'ffmpeg',
+            '-f', 'lavfi',
+            '-i', 'anullsrc=r=44100:cl=stereo',
+            '-f', 'wav',
+            'pipe:1'
+        ]
+        audio_process = subprocess.Popen(null_audio_command, stdout=process.stdin)
 
     video_devices, audio_devices = show_devices()
 
@@ -406,47 +441,63 @@ def HomeView(page: Router):
     page.set_overlay(pick_files_dialog)
     #page.page.overlay.append(pick_files_dialog)
     curtain_container = ft.Container(
-      # bgcolor=ft.colors.BLACK,
+      bgcolor=ft.colors.BLACK,
       width=1300,
       height=50,
     )
     live_container = ft.Container(
-      # bgcolor=ft.colors.BLACK,
+      bgcolor=ft.colors.BLACK,
       width=700,
       height=350,
       content=img_live
     )
-    # video = ft.Video(
-    #         expand=True,
-    #         playlist=sample_media,
-    #         playlist_mode=ft.PlaylistMode.LOOP,
-    #         fill_color=ft.colors.BLACK26,
-    #         aspect_ratio=16/9,
-    #         volume=100,
-    #         autoplay=True,
-    #         filter_quality=ft.FilterQuality.HIGH,
-    #         muted=False,
-    #         on_loaded=lambda e: print("Video cargado exitosamente!"),
-    #         on_enter_fullscreen=lambda e: print("Video a pantalla completa!"),
-    #         on_exit_fullscreen=lambda e: print("Video salió de pantalla completa!"),
-    # ) 
+    video = ft.Video(
+            expand=True,
+            playlist=sample_media,
+            playlist_mode=ft.PlaylistMode.LOOP,
+            fill_color=ft.colors.BLACK26,
+            aspect_ratio=16/9,
+            volume=100,
+            autoplay=True,
+            filter_quality=ft.FilterQuality.HIGH,
+            muted=False,
+            on_loaded=lambda e: print("Video cargado exitosamente!"),
+            on_enter_fullscreen=lambda e: print("Video a pantalla completa!"),
+            on_exit_fullscreen=lambda e: print("Video salió de pantalla completa!"),
+    ) 
+    stream_video = ft.Video(
+            expand=True,
+            playlist=sample_media,
+            playlist_mode=ft.PlaylistMode.LOOP,
+            fill_color=ft.colors.BLACK26,
+            aspect_ratio=16/9,
+            volume=100,
+            autoplay=True,
+            filter_quality=ft.FilterQuality.HIGH,
+            muted=False,
+            show_controls=False,
+            on_loaded=lambda e: print("Video cargado exitosamente!"),
+            on_enter_fullscreen=lambda e: print("Video a pantalla completa!"),
+            on_exit_fullscreen=lambda e: print("Video salió de pantalla completa!"),
+    ) 
     
     preview_container = ft.Container(
-        # bgcolor=ft.colors.BLACK,
+        bgcolor=ft.colors.BLACK,
         width=700,
         height=350,
-        content=img_live
+        content=video
     )
 
+    streaming_and_preview_row = ft.Row(
+        [
+            preview_container,
+            live_container
+        ],
+        alignment=ft.MainAxisAlignment
+    )
     content = ft.Column(
             [
-                ft.Row(
-                [
-                    preview_container,
-                    live_container
-                ],
-                alignment=ft.MainAxisAlignment.CENTER
-            ),
+                streaming_and_preview_row,
                 ft.Row(
                   [
                     curtain_container
@@ -460,7 +511,7 @@ def HomeView(page: Router):
                       content=ft.Column([
                         ft.ListTile(
                           title=ft.Text("Escenas"),
-                          # bgcolor=ft.colors.BLACK38,
+                          bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([
                           ft.TextButton(
@@ -476,7 +527,8 @@ def HomeView(page: Router):
                                   "Pick files",
                                   icon=ft.icons.UPLOAD_FILE,
                                   on_click=lambda _: pick_files_dialog.pick_files(
-                                      allow_multiple=True
+                                      allow_multiple=True,
+                                      allowed_extensions=["mp4", "avi"]
                                   ),
                               ),
                               selected_files,
@@ -492,7 +544,7 @@ def HomeView(page: Router):
                       content=ft.Column([
                         ft.ListTile(
                           title=ft.Text("Configuración de transmisión"),
-                          # bgcolor=ft.colors.BLACK38,
+                          bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([
                           ft.Row([  
@@ -511,7 +563,7 @@ def HomeView(page: Router):
                       content=ft.Column([
                         ft.ListTile(
                           title=ft.Text("Audio y Video"),
-                          # bgcolor=ft.colors.BLACK38,
+                          bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([drop_list,
                                    audio_drop_list,        
@@ -540,7 +592,7 @@ def HomeView(page: Router):
                       content=ft.Column([
                         ft.ListTile(
                           title=ft.Text("Controles"),
-                          # bgcolor=ft.colors.BLACK38,
+                          bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([
                           ft.TextButton(
