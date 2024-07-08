@@ -16,7 +16,7 @@ import platform
 import re
 import queue
 import pyaudio
-import sounddevice as sd
+# import sounddevice as sd
 import numpy as np
 
 PLATFORM = platform.system()
@@ -128,8 +128,8 @@ def extract_audio(video_path, audio_path):
         '-map', 'a',
         audio_path]
     subprocess.run(command)
-# video_pipe = create_pipe(video_pipe_name)
-# audio_pipe = create_pipe(audio_pipe_name)  
+video_pipe = create_pipe(video_pipe_name)
+audio_pipe = create_pipe(audio_pipe_name)  
 
 def HomeView(page: Router):
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
@@ -143,6 +143,8 @@ def HomeView(page: Router):
     global stream_video_added
     stream_video_added = False
     global curtain
+    global stream_started
+    stream_started = False
     def on_change_drop_list(e):
       print(audio_drop_list.value)
       
@@ -318,14 +320,23 @@ def HomeView(page: Router):
               print("Error al procesar el fotograma:", e)
               break
         p.terminate()  # Terminar el proceso ffmpeg
-
+    
+    
     def on_Iniciar_transmision_click(e):
+        global stream_started
         if drop_list.value == '1':
           thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
           thread.start()
         else:
           thread = threading.Thread(target=stream_webcam, args=(content._get_children()[0]._get_children()[0],))
           thread.start()
+        if stream_started:
+          stream_started = False
+          stream_button.text = "Iniciar transmisión"
+        else:
+          stream_started = True
+          stream_button.text = "Detener transmisión"
+        stream_button.update()
 
     global curtain_thread_started
     global video_thread_started
@@ -475,6 +486,7 @@ def HomeView(page: Router):
 
     def capture_curtain_video():
         global curtain_video_cap
+        global stream_started
         curtain_video_cap = cv2.VideoCapture(current_curtain_selected)
         while True:
             if curtain:
@@ -489,9 +501,19 @@ def HomeView(page: Router):
                 else:
                   video_pipe.write(curtain_frame.tobytes())
                   video_pipe.flush()
+            if not stream_started:
+                break
+        curtain_video_cap.release()
+        if PLATFORM == 'Windows':
+          win32file.CloseHandle(video_pipe)
+        else:
+          video_pipe.close()
+          os.remove(video_pipe_name)
+          
     def capture_camera_video(pipe_name):
         global stream_video_cap
         stream_video_cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        global stream_started
         # stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         # stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         pipe = create_pipe(pipe_name)
@@ -529,7 +551,8 @@ def HomeView(page: Router):
                   else:
                     pipe.write(camera_frame.tobytes())
                     pipe.flush()
-                    
+              if not stream_started:
+                  break
         except Exception as e:
             print(f"Error en capture_camera_video: {e}")
             
@@ -538,7 +561,6 @@ def HomeView(page: Router):
             if PLATFORM == 'Windows':
               win32pipe.DisconnectNamedPipe(pipe)
               win32file.CloseHandle(pipe)
-              
             else:
               pipe.close()
               os.remove(pipe_name)
@@ -655,6 +677,12 @@ def HomeView(page: Router):
       width=400,
       on_click=show_curtain
     )
+    
+    stream_button = ft.TextButton(
+      text="Iniciar transmisión",
+      width=400,
+      on_click=on_Iniciar_transmision_click
+    )
     content = ft.Column(
             [
                 streaming_and_preview_row,
@@ -755,11 +783,7 @@ def HomeView(page: Router):
                           bgcolor=ft.colors.BLACK38,
                         ),
                         ft.Column([
-                          ft.TextButton(
-                            "Iniciar transmisión",
-                            width=400,
-                            on_click=on_Iniciar_transmision_click
-                          ),
+                          stream_button,
                           ft.TextButton(
                             "Iniciar grabación",
                             width=400
