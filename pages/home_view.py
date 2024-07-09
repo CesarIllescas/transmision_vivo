@@ -464,15 +464,16 @@ def HomeView(page: Router):
                                 encoding='utf-8')
       elif PLATFORM == 'Darwin': 
         print("MacOS") 
-        result = subprocess.run(['ffmpeg', '-f', 'avfoundation', 
-                                 '-list_devices', 'true', '-i', ''], 
+        result = subprocess.run(['ffmpeg', '-hide_banner',
+                                 '-list_devices', 'true',
+                                 '-f', 'avfoundation', 
+                                 '-i', 'dummy'], 
                                 capture_output=True, text=True)
       
       output = result.stderr
+      print(output)
       video_devices = []
       audio_devices = []
-
-      
 
       for line in output.split('\n'):
         match = re.search(r'"(.*?)" \((.*?)\)', line)
