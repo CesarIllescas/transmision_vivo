@@ -19,6 +19,7 @@ import pyaudio
 # import sounddevice as sd
 import numpy as np
 
+print("Starting HomeView")
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "statics/audio_output.wav"
 if PLATFORM == 'Windows':
@@ -128,8 +129,8 @@ def extract_audio(video_path, audio_path):
         '-map', 'a',
         audio_path]
     subprocess.run(command)
-video_pipe = create_pipe(video_pipe_name)
-audio_pipe = create_pipe(audio_pipe_name)  
+#video_pipe = create_pipe(video_pipe_name)
+#audio_pipe = create_pipe(audio_pipe_name)  
 
 def HomeView(page: Router):
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
@@ -455,12 +456,14 @@ def HomeView(page: Router):
 
     sample_media = []
     def show_devices():
+      print("Plataforma", PLATFORM)
       if PLATFORM == 'Windows':
         result = subprocess.run(['ffmpeg', '-f', 'dshow', '-list_devices', 
                                  'true', '-i', 
                                  'dummy'], capture_output=True, text=True,
                                 encoding='utf-8')
-      elif PLATFORM == 'Darwin':  
+      elif PLATFORM == 'Darwin': 
+        print("MacOS") 
         result = subprocess.run(['ffmpeg', '-f', 'avfoundation', 
                                  '-list_devices', 'true', '-i', ''], 
                                 capture_output=True, text=True)
@@ -468,6 +471,8 @@ def HomeView(page: Router):
       output = result.stderr
       video_devices = []
       audio_devices = []
+
+      
 
       for line in output.split('\n'):
         match = re.search(r'"(.*?)" \((.*?)\)', line)
