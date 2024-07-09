@@ -21,7 +21,7 @@ import numpy as np
 
 print("Starting HomeView")
 PLATFORM = platform.system()
-AUDIO_OUTPUT = "statics/audio_output.wav"
+AUDIO_OUTPUT = "transmision_vivo/statics/audio_output.wav"
 if PLATFORM == 'Windows':
   import win32pipe, win32file
   
