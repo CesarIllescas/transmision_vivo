@@ -456,12 +456,24 @@ def HomeView(page: Router):
 
     sample_media = []
     def show_devices():
-      print("Plataforma", PLATFORM)
+      video_devices = []
+      audio_devices = []
       if PLATFORM == 'Windows':
         result = subprocess.run(['ffmpeg', '-f', 'dshow', '-list_devices', 
                                  'true', '-i', 
                                  'dummy'], capture_output=True, text=True,
                                 encoding='utf-8')
+        output = result.stdout
+        for line in output.split('\n'):
+          match = re.search(r'"(.*?)" \((.*?)\)', line)
+          if match:
+              device_name = match.group(1)
+              device_type = match.group(2)
+              if device_type == "video" and device_name not in video_devices:
+                  video_devices.append(device_name)
+              elif device_type == "audio" and device_name not in audio_devices:
+                  audio_devices.append(device_name)
+      
       elif PLATFORM == 'Darwin': 
         print("MacOS") 
         result = subprocess.run(['ffmpeg', '-hide_banner',
@@ -470,21 +482,29 @@ def HomeView(page: Router):
                                  '-i', 'dummy'], 
                                 capture_output=True, text=True)
       
-      output = result.stderr
-      print(output)
-      video_devices = []
-      audio_devices = []
-
-      for line in output.split('\n'):
-        match = re.search(r'"(.*?)" \((.*?)\)', line)
-        if match:
-            device_name = match.group(1)
-            device_type = match.group(2)
-            if device_type == "video" and device_name not in video_devices:
-                video_devices.append(device_name)
-            elif device_type == "audio" and device_name not in audio_devices:
-                audio_devices.append(device_name)
-    
+        output = result.stderr
+        video_flag = False
+        audio_flag = False
+        for line in output.split('\n'):
+            if 'AVFoundation video devices:' in line:
+                video_flag = True
+                audio_flag = False
+            elif 'AVFoundation audio devices:' in line:
+                audio_flag = True
+                video_flag = False
+            elif video_flag:
+                match = re.search(r'\[\d+\] (.*)', line)
+                if match:
+                    device_name = match.group(1)
+                    if device_name not in video_devices:
+                        video_devices.append(device_name)
+            elif audio_flag:
+                match = re.search(r'\[\d+\] (.*)', line)
+                if match:
+                    device_name = match.group(1)
+                    if device_name not in audio_devices:
+                        audio_devices.append(device_name) 
+      
       return video_devices, audio_devices
     
     def play_audio(audio_device):
