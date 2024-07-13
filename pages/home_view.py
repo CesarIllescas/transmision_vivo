@@ -18,7 +18,8 @@ import queue
 import pyaudio
 # import sounddevice as sd
 import numpy as np
-
+import wave
+import errno
 print("Starting HomeView")
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "transmision_vivo/statics/audio_output.wav"
@@ -37,30 +38,48 @@ audio_process = None
 audio_queue = queue.Queue()
 
 def microphone_audio_stream(pipe_name, event, current_curtain_selected):
+    global audio_pipe
+    global curtain
     print("Starting audio capture")
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16,
-                    channels=channels,
+                    channels=1,
                     rate=rate,
                     input=True,
                     frames_per_buffer=chunk)
-    pipe = create_pipe(pipe_name)
+    audio_pipe = create_pipe(pipe_name)
     if platform.system() == 'Windows':
-        connect_pipe(pipe)
-    event.set()  # Signal that the audio pipe is ready
+        connect_pipe(audio_pipe)
+   # event.set()  # Signal that the audio pipe is ready
     try:
         while True:
-            audio_data = stream.read(chunk)
+            #audio_data = stream.read(chunk, exception_on_overflow=False)
             if platform.system() == 'Windows':
-                win32file.WriteFile(pipe, audio_data)
+                win32file.WriteFile(audio_pipe, audio_data)
             else:
+                #print(curtain)
                 if curtain:
-                  with open(AUDIO_OUTPUT, 'rb') as f:
-                    audio_data = f.read()
+                    with open(AUDIO_OUTPUT, 'rb') as f:
+                        while curtain:
+                            audio_data = f.read()
+                            if not audio_data:
+                                f.seek(0)
+                                continue
+                            if platform.system() == 'Windows':
+                                win32file.WriteFile(audio_pipe, audio_data)
+                            else:
+                                audio_pipe.write(audio_data)
+                                audio_pipe.flush()
+                            if not curtain:
+                                break
                 else:
-                  audio_data = stream.read(chunk)
-                pipe.write(audio_data)
-                pipe.flush()
+                   audio_data = stream.read(chunk, exception_on_overflow=False)
+                   if platform.system() == 'Windows':
+                      win32file.WriteFile(audio_pipe, audio_data)
+                   else:
+                      audio_pipe.write(audio_data)
+                      audio_pipe.flush()
+              
     except Exception as e:
         print(f"Error in microphone_audio_stream: {e}")
     finally:
@@ -68,11 +87,12 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
         stream.close()
         p.terminate()
         if platform.system() == 'Windows':
-            win32pipe.DisconnectNamedPipe(pipe)
-            win32file.CloseHandle(pipe)
+            win32pipe.DisconnectNamedPipe(audio_pipe)
+            win32file.CloseHandle(audio_pipe)
         else:
-            pipe.close()
-            os.remove(pipe_name)
+            audio_pipe.close()
+            #os.remove(pipe_name)
+#FB-882969723857117-0-AbzPT_b37qNPkh2P
 
 def video_audio_stream(video_path, stop_event):
     command = [
@@ -109,10 +129,13 @@ def create_pipe(pipe_name):
         print(f"Pipe created: {pipe_name}")
         return pipe
     else:
-        if not os.path.exists(pipe_name):
-            print(f"Creating FIFO: {pipe_name}")
-            os.mkfifo(pipe_name)
-        return open(pipe_name, 'wb')
+      try:
+          if not os.path.exists(pipe_name):
+              os.mkfifo(pipe_name)
+          return open(pipe_name, 'wb')
+      except OSError as oe:
+          if oe.errno != errno.EEXIST:
+              raise
 
 def connect_pipe(pipe):
     if PLATFORM == 'Windows':
@@ -129,6 +152,9 @@ def extract_audio(video_path, audio_path):
         '-map', 'a',
         audio_path]
     subprocess.run(command)
+
+#global video_pipe
+#global audio_pipe
 #video_pipe = create_pipe(video_pipe_name)
 #audio_pipe = create_pipe(audio_pipe_name)  
 
@@ -146,9 +172,15 @@ def HomeView(page: Router):
     global curtain
     global stream_started
     stream_started = False
+    global input_changed
+    global current_input
+    current_input = 0
+    input_changed = False
     def on_change_drop_list(e):
-      print(audio_drop_list.value)
-      
+      global input_changed
+      global current_input
+      input_changed = True
+      current_input = e.control.value
       page.update()
 
     def on_change_server_input(e):
@@ -196,9 +228,17 @@ def HomeView(page: Router):
     def handle_change_end(e):
         slider_status.value = "Finished sliding"
         page.update()
+
+    def on_change_audio_drop_list(e):
+      global current_curtain_selected
+      current_curtain_selected = e.control.value
+      page.update()
         
     
     def stream_webcam(container: ft.Container):
+          global video_pipe
+          #video_pipe = create_pipe(video_pipe_name)
+          #print("Pipe creado")
           streams = ""
           i = 1
           for checkbox in platform_drop_list:
@@ -214,19 +254,37 @@ def HomeView(page: Router):
                 elif checkbox.label == "Otro":
                     streams += f"{select}{custom_server.value}{key}|"
                 i += 1
+          
+          global curtain
+          global current_curtain_selected
+
+          global video_thread_started
+         
+          if not video_thread_started:
+                  video_thread_started = True
+           #        camera_thread = threading.Thread(target=capture_camera_video, args=(video_pipe_name,))
+           #       camera_thread.start()
+                  audio_thread = threading.Thread(target=microphone_audio_stream, args=(audio_pipe_name, None, current_curtain_selected))
+                  audio_thread.start()
+                  # mic_thread.start()
+
           command = [ 
                 'ffmpeg',
                 '-y',
                 '-f', 'rawvideo',
                 '-vcodec', 'rawvideo',
                 '-pixel_format', 'bgr24',
-                '-s', '640x480',
+                '-s', '1280x720',
                 '-framerate', '30',
+                '-thread_queue_size', '1024',
                 '-i', video_pipe_name,
                 '-f', 's16le',
-                '-ac', '2',
+                '-ac', '1',
                 '-ar', '44100',
+                '-thread_queue_size', '1024',
                 '-i', audio_pipe_name,
+                #'async', '1',
+                #'vsync', '1',
                 '-map', '0:v',
                 '-map', '1:a',
                 '-c:v', 'libx264',
@@ -244,18 +302,7 @@ def HomeView(page: Router):
                 streams
             ]
           process = subprocess.Popen(command, stdin=subprocess.PIPE)
-          global curtain
-          global current_curtain_selected
-
-          global video_thread_started
-         
-          if not video_thread_started:
-                  video_thread_started = True
-                  camera_thread = threading.Thread(target=capture_camera_video, args=(video_pipe_name,))
-                  camera_thread.start()
-                  audio_thread = threading.Thread(target=microphone_audio_stream, args=(current_curtain_selected,))
-                  audio_thread.start()
-                  # mic_thread.start()
+          video_pipe = create_pipe(video_pipe_name)
           # while True:
           #   frame = frame_queue.get()
           #   audio_frame = audio_queue.get()
@@ -325,6 +372,9 @@ def HomeView(page: Router):
     
     def on_Iniciar_transmision_click(e):
         global stream_started
+        
+        if PLATFORM == 'Windows':
+          connect_pipe(video_pipe)
         if drop_list.value == '1':
           thread = threading.Thread(target=capture_screen, args=(content._get_children()[0]._get_children()[0],))
           thread.start()
@@ -428,17 +478,42 @@ def HomeView(page: Router):
       
       curtain_container.content = images
       curtain_container.update()
+    global count
+    count = 0
     def click(e):
       global current_curtain_selected
       global video_added
+      global count
+      if not video_added:
+        preview_container.content = video
+        preview_container.update()
       if video_added:
+        print("Video añadido")
+        preview_container.content = img_preview
         video.playlist_remove(0)
+        preview_container.update()
+        page.update()
+        preview_container.content = video
+        preview_container.update()
+        page.update()
+        #preview_container.update()  
+        #page.update()
+        
+        #preview_container.update()
+        #page.update()
+
       current_curtain_selected = e.control.key
-      
       video.playlist_add(ft.VideoMedia(e.control.key))
-      video.next()
+      video.jump_to(0)
+      video.update()
       page.update()
-      video_added = True
+      print("Video añadido", video.playlist)
+      #video.update()
+      #video.update()
+      #preview_container.update()
+      streaming_and_preview_row.update()
+      #page.update()
+      video_added = True      
       extract_audio_thread = threading.Thread(target=extract_audio, args=(current_curtain_selected, AUDIO_OUTPUT))
       extract_audio_thread.start()
       
@@ -496,7 +571,7 @@ def HomeView(page: Router):
                 match = re.search(r'\[\d+\] (.*)', line)
                 if match:
                     device_name = match.group(1)
-                    if device_name not in video_devices:
+                    if device_name not in video_devices and not 'Capture screen' in device_name:
                         video_devices.append(device_name)
             elif audio_flag:
                 match = re.search(r'\[\d+\] (.*)', line)
@@ -514,14 +589,19 @@ def HomeView(page: Router):
         global curtain_video_cap
         global stream_started
         curtain_video_cap = cv2.VideoCapture(current_curtain_selected)
+        curtain_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        curtain_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        curtain_video_cap.set(cv2.CAP_PROP_FPS, 30)
         while True:
             if curtain:
                 ret, curtain_frame = curtain_video_cap.read()
                 if not ret:
                     curtain_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
+                curtain_frame = cv2.resize(curtain_frame, (1280, 720))
+                curtain_frame = cv2.cvtColor(curtain_frame, cv2.COLOR_BGR2RGB)
+                curtain_frame = cv2.cvtColor(curtain_frame, cv2.COLOR_RGB2BGR)
 
-                curtain_frame = cv2.resize(curtain_frame, (640, 480))
                 if PLATFORM == 'Windows':
                   win32file.WriteFile(video_pipe, curtain_frame.tobytes())
                 else:
@@ -537,22 +617,40 @@ def HomeView(page: Router):
           os.remove(video_pipe_name)
           
     def capture_camera_video(pipe_name):
+        global video_pipe
         global stream_video_cap
-        stream_video_cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        global stream_started
-        # stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        # stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        pipe = create_pipe(pipe_name)
+        global input_changed
+        global current_input
         if PLATFORM == 'Windows':
-          win32pipe.ConnectNamedPipe(pipe, None)
+          stream_video_cap = cv2.VideoCapture(int(current_input), cv2.CAP_DSHOW)
+        else:
+          stream_video_cap = cv2.VideoCapture(int(current_input))
+        global stream_started
+        stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
+        print("Pipe creado")
+        if PLATFORM == 'Windows':
+          win32pipe.ConnectNamedPipe(video_pipe, None)
         try: 
           while True:
+              if input_changed:
+                  stream_video_cap.release()
+                  if PLATFORM == 'Windows':
+                    stream_video_cap = cv2.VideoCapture(int(current_input), cv2.CAP_DSHOW)
+                  else:
+                    stream_video_cap = cv2.VideoCapture(int(current_input))
+                  stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                  stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                  stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
+                  input_changed = False
               ret, camera_frame = stream_video_cap.read()
               if not ret:
                   print("No se pudo leer el fotograma de la cámara")
+
                   break
               
-              camera_frame = cv2.resize(camera_frame, (640, 480))
+              camera_frame = cv2.resize(camera_frame, (1280, 720))
               ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
               camera_frame_base64 = base64.b64encode(camera_frame_bytes).decode('utf-8')
 
@@ -572,28 +670,28 @@ def HomeView(page: Router):
                       img_live.update()
                   if live_container:
                       live_container.update()
-                  if PLATFORM == 'Windows':
-                    win32file.WriteFile(pipe, camera_frame.tobytes())
-                  else:
-                    pipe.write(camera_frame.tobytes())
-                    pipe.flush()
-              if not stream_started:
-                  break
+                  if PLATFORM == 'Windows' and stream_started:
+                    win32file.WriteFile(video_pipe, camera_frame.tobytes())
+                  if stream_started and not PLATFORM == 'Windows':
+                    video_pipe.write(camera_frame.tobytes())
+                    video_pipe.flush()
+
+              #if not stream_started:
+               #   break
         except Exception as e:
             print(f"Error en capture_camera_video: {e}")
             
         finally:
             stream_video_cap.release()
             if PLATFORM == 'Windows':
-              win32pipe.DisconnectNamedPipe(pipe)
-              win32file.CloseHandle(pipe)
-            else:
-              pipe.close()
-              os.remove(pipe_name)
+              win32pipe.DisconnectNamedPipe(video_pipe)
+              win32file.CloseHandle(video_pipe)
+            if not PLATFORM == 'Windows' and stream_started:
+              video_pipe.close()
+              #os.remove(pipe_name)
             #frame_queue.put(camera_frame.tobytes())
 
                 # time.sleep(1 / 30.0)  # Control de la velocidad de fotogramas
-
     def switch_to_video_audio():
         command = [
         'ffmpeg',
@@ -624,7 +722,7 @@ def HomeView(page: Router):
 
     video_devices, audio_devices = show_devices()
 
-    options = [ft.dropdown.Option('1', "Grabar pantalla")] + [ft.dropdown.Option(device, device) for i, device in enumerate(video_devices)]
+    options = [ft.dropdown.Option('1', "Grabar pantalla")] + [ft.dropdown.Option(key=str(i), text=device) for i, device in enumerate(video_devices)]
 
     drop_list = ft.Dropdown(
           width=380,
@@ -636,7 +734,7 @@ def HomeView(page: Router):
     audio_drop_list = ft.Dropdown(
           width=380,
           options=audio_options,
-          on_change=on_change_drop_list,
+          on_change=on_change_audio_drop_list,
           label="Dispositivo de audio"
         )
     pick_files_dialog = ft.FilePicker(on_result=show_file)
@@ -688,7 +786,6 @@ def HomeView(page: Router):
         bgcolor=ft.colors.BLACK,
         width=700,
         height=350,
-        content=video
     )
 
     streaming_and_preview_row = ft.Row(
@@ -709,6 +806,8 @@ def HomeView(page: Router):
       width=400,
       on_click=on_Iniciar_transmision_click
     )
+    camera_thread = threading.Thread(target=capture_camera_video, args=(video_pipe_name,))
+    camera_thread.start()
     content = ft.Column(
             [
                 streaming_and_preview_row,

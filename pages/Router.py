@@ -50,3 +50,6 @@ class Router:
     def set_overlay(self, overlay):
         self.page.overlay.append(overlay)
         self.page.update()
+
+    async def update_async(self):
+        await self.page.add_async(self.body)
