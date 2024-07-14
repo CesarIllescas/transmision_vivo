@@ -7,7 +7,7 @@ def main(page: ft.Page):
     page.title = "SICOM Studio"
     page.appbar = AppBar(page)
     page.on_route_change = router.route_change
-    page.window_full_screen = True
+    # page.window_full_screen = True
     router.page = page
     page.add(
         router.body

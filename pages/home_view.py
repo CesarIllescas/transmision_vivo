@@ -20,7 +20,7 @@ import pyaudio
 import numpy as np
 import wave
 import errno
-print("Starting HomeView")
+import sqlite3
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "transmision_vivo/statics/audio_output.wav"
 if PLATFORM == 'Windows':
@@ -40,7 +40,6 @@ audio_queue = queue.Queue()
 def microphone_audio_stream(pipe_name, event, current_curtain_selected):
     global audio_pipe
     global curtain
-    print("Starting audio capture")
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16,
                     channels=1,
@@ -176,6 +175,29 @@ def HomeView(page: Router):
     global current_input
     current_input = 0
     input_changed = False
+    
+    def connect_sqlite():
+      conn = sqlite3.connect('transmision_vivo/statics/data.db')
+      cursor = conn.cursor()
+      return conn, cursor
+    
+    def create_table(cursor):
+      cursor.execute('''CREATE TABLE IF NOT EXISTS transmisiones
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      plataforma TEXT NOT NULL,
+                      key TEXT NOT NULL)''')
+
+    def get_transmisiones(cursor):
+      cursor.execute("SELECT * FROM transmisiones")
+      return cursor.fetchall()      
+    def insert_transmision(cursor, plataforma, key):
+      cursor.execute("DELETE FROM transmisiones WHERE plataforma = ?", (plataforma,))
+      cursor.execute("INSERT INTO transmisiones (plataforma, key) VALUES (?, ?)", (plataforma, key))
+      
+    conn, cursor = connect_sqlite()
+    create_table(cursor)
+    conn.commit()
+      
     def on_change_drop_list(e):
       global input_changed
       global current_input
@@ -195,8 +217,18 @@ def HomeView(page: Router):
     global process 
     process = None
     platforms = ["Facebook", "Youtube", "X", "Otro"]
+    keys = get_transmisiones(cursor)
+    key_dict = {key[1]: key[2] for key in keys}
     platform_drop_list = [ft.Checkbox(label=platform, height=45, on_change=on_change_checkbox) for platform in platforms]
-    platform_Inputs = [ft.TextField(label=platform, height=45, width=230, disabled=True) for platform in platforms]
+    platform_Inputs = [
+            ft.TextField(
+                label=platform, 
+                height=45, 
+                width=230, 
+                disabled=True, 
+                value=key_dict.get(platform, "")
+            ) for platform in platforms
+        ]
 
     img_live = ft.Image(
           src="statics/images/black.png",
@@ -372,7 +404,11 @@ def HomeView(page: Router):
     
     def on_Iniciar_transmision_click(e):
         global stream_started
-        
+        for checkbox in platform_drop_list:
+            if checkbox.value:
+                key = platform_Inputs[platform_drop_list.index(checkbox)].value
+                insert_transmision(cursor, checkbox.label, key)
+        conn.commit()
         if PLATFORM == 'Windows':
           connect_pipe(video_pipe)
         if drop_list.value == '1':
@@ -399,7 +435,6 @@ def HomeView(page: Router):
       global stream_video_added
       global current_curtain_selected
       global process
-      print("Cortina", curtain)
       if curtain == False:
           curtain = True
           live_container.content = stream_video
@@ -413,7 +448,6 @@ def HomeView(page: Router):
           live_container.content = stream_video
           live_container.update()
           boton_cortina.text = "Detener cortina"
-          print("Iniciando cortina", boton_cortina.text)
           boton_cortina.update()
           page.update()
           live_container.update()
@@ -488,7 +522,6 @@ def HomeView(page: Router):
         preview_container.content = video
         preview_container.update()
       if video_added:
-        print("Video añadido")
         preview_container.content = img_preview
         video.playlist_remove(0)
         preview_container.update()
@@ -538,7 +571,7 @@ def HomeView(page: Router):
                                  'true', '-i', 
                                  'dummy'], capture_output=True, text=True,
                                 encoding='utf-8')
-        output = result.stdout
+        output = result.stderr
         for line in output.split('\n'):
           match = re.search(r'"(.*?)" \((.*?)\)', line)
           if match:
@@ -550,7 +583,6 @@ def HomeView(page: Router):
                   audio_devices.append(device_name)
       
       elif PLATFORM == 'Darwin': 
-        print("MacOS") 
         result = subprocess.run(['ffmpeg', '-hide_banner',
                                  '-list_devices', 'true',
                                  '-f', 'avfoundation', 
@@ -579,7 +611,6 @@ def HomeView(page: Router):
                     device_name = match.group(1)
                     if device_name not in audio_devices:
                         audio_devices.append(device_name) 
-      
       return video_devices, audio_devices
     
     def play_audio(audio_device):
@@ -628,10 +659,9 @@ def HomeView(page: Router):
         global stream_started
         stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
-        print("Pipe creado")
-        if PLATFORM == 'Windows':
-          win32pipe.ConnectNamedPipe(video_pipe, None)
+        stream_video_cap.set(cv2.CAP_PROP_FPS, 60)
+        # if PLATFORM == 'Windows':
+        #   win32pipe.ConnectNamedPipe(video_pipe, None)
         try: 
           while True:
               if input_changed:
@@ -642,7 +672,7 @@ def HomeView(page: Router):
                     stream_video_cap = cv2.VideoCapture(int(current_input))
                   stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                   stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                  stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
+                  stream_video_cap.set(cv2.CAP_PROP_FPS, 60)
                   input_changed = False
               ret, camera_frame = stream_video_cap.read()
               if not ret:
@@ -650,7 +680,7 @@ def HomeView(page: Router):
 
                   break
               
-              camera_frame = cv2.resize(camera_frame, (1280, 720))
+              # camera_frame = cv2.resize(camera_frame, (1280, 720))
               ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
               camera_frame_base64 = base64.b64encode(camera_frame_bytes).decode('utf-8')
 
