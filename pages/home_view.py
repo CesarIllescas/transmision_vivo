@@ -23,7 +23,7 @@ import errno
 import sqlite3
 
 PLATFORM = platform.system()
-AUDIO_OUTPUT = "transmision_vivo/statics/audio_output.wav"
+AUDIO_OUTPUT = "statics/audio_output.wav"
 if PLATFORM == 'Windows':
   import win32pipe, win32file
   
@@ -49,6 +49,7 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
                     input=True,
                     frames_per_buffer=chunk)
     audio_pipe = create_pipe(pipe_name)
+    print("Pipe creado")
     if platform.system() == 'Windows':
         connect_pipe(audio_pipe)
     try:
@@ -68,10 +69,10 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
                                 audio_queue.put((timestamp, audio_data))
                                 win32file.WriteFile(audio_pipe, audio_data)
                             else:
-                                timestamp = time.time()
-                                audio_queue.put((timestamp, audio_data))
-                                # audio_pipe.write(audio_data)
-                                # audio_pipe.flush()
+                                #timestamp = time.time()
+                                #audio_queue.put((timestamp, audio_data))
+                                audio_pipe.write(audio_data)
+                                audio_pipe.flush()
                             if not curtain:
                                 break
                 else:
@@ -79,10 +80,10 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
                    if platform.system() == 'Windows':
                       win32file.WriteFile(audio_pipe, audio_data)
                    else:
-                      timestamp = time.time()
-                      audio_queue.put((timestamp, audio_data))
-                      # audio_pipe.write(audio_data)
-                      # audio_pipe.flush()
+                     # timestamp = time.time()
+                     # audio_queue.put((timestamp, audio_data))
+                     audio_pipe.write(audio_data)
+                     audio_pipe.flush()
               
     except Exception as e:
         print(f"Error in microphone_audio_stream: {e}")
@@ -297,12 +298,12 @@ def HomeView(page: Router):
           global process
           if not video_thread_started:
                   video_thread_started = True
-                  camera_thread = threading.Thread(target=capture_camera_video, args=(video_pipe_name,))
-                  camera_thread.start()
+                  #camera_thread = threading.Thread(target=capture_camera_video, args=(video_pipe_name,))
+                  #camera_thread.start()
                   audio_thread = threading.Thread(target=microphone_audio_stream, args=(audio_pipe_name, None, current_curtain_selected))
                   audio_thread.start()
-                  sinc_thread = threading.Thread(target=synchronize_and_send)
-                  sinc_thread.start()
+                  #sinc_thread = threading.Thread(target=synchronize_and_send)
+                  #sinc_thread.start()
 
           command = [ 
                 'ffmpeg',
@@ -335,8 +336,13 @@ def HomeView(page: Router):
                 '-f', 'tee',
                 streams
             ]
-          process = subprocess.Popen(command, stdin=subprocess.PIPE)
-         
+          ffmpeg_thread = threading.Thread(target=execute_ffmpeg, args=(command,))
+          ffmpeg_thread.start()
+          
+    def execute_ffmpeg(command):
+        process = subprocess.Popen(command, stdin=subprocess.PIPE)
+        return process
+
     def capture_screen(container: ft.Container):
         youtube_key = "yj7j-fuzw-7370-6956-38t8"
         rtmp_url="rtmp://a.rtmp.youtube.com/live2/{}" 
@@ -624,10 +630,10 @@ def HomeView(page: Router):
                 if PLATFORM == 'Windows':
                   win32file.WriteFile(video_pipe, curtain_frame.tobytes())
                 else:
-                  timestamp = time.time()
-                  video_queue.put((timestamp, curtain_frame.tobytes()))
-                  # video_pipe.write(curtain_frame.tobytes())
-                  # video_pipe.flush()
+                  #timestamp = time.time()
+                  #video_queue.put((timestamp, curtain_frame.tobytes()))
+                  video_pipe.write(curtain_frame.tobytes())
+                  video_pipe.flush()
                 end_time = time.time()
                 elapsed_time = end_time - start_time
                 sleep_time = frame_duration - elapsed_time
@@ -701,19 +707,19 @@ def HomeView(page: Router):
                       img_live.update()
                   if live_container:
                       live_container.update()
-                  if stream_started:
-                    if stream_started:
-                      time.sleep(10)
-                      stream_started = False
-                    process.stdin.write(camera_frame.tobytes())
+                  #if stream_started:
+                    #if stream_started:
+                      #time.sleep(10)
+                     # stream_started = False
+                    #process.stdin.write(camera_frame.tobytes())
                   # if PLATFORM == 'Windows' and stream_started:
                   #   win32file.WriteFile(video_pipe, camera_frame.tobytes())
                   if stream_started and not PLATFORM == 'Windows':
                     try:
-                      timestamp = time.time()
-                      video_queue.put((timestamp, camera_frame.tobytes()))
-                      # video_pipe.write(camera_frame.tobytes())
-                      # video_pipe.flush()
+                      #timestamp = time.time()
+                      #video_queue.put((timestamp, camera_frame.tobytes()))
+                      video_pipe.write(camera_frame.tobytes())
+                      video_pipe.flush()
                        #video_queue.put(camera_frame.tobytes())
                     except Exception as e:
                       print(f"Error en capture_camera_video: {e}")
@@ -742,6 +748,7 @@ def HomeView(page: Router):
 
     def synchronize_and_send():
         global stream_started
+        print("Sincronizando y enviando")
         while stream_started:
             if not video_queue.empty() and not audio_queue.empty():
                 video_timestamp, video_frame = video_queue.get()
@@ -759,6 +766,8 @@ def HomeView(page: Router):
                 else:
                     pass
             time.sleep(0.01)
+    #sincronize_thread = threading.Thread(target=synchronize_and_send)
+    #sincronize_thread.start()
     video_devices, audio_devices = show_devices()
 
     options = [ft.dropdown.Option('1', "Grabar pantalla")] + [ft.dropdown.Option(key=str(i), text=device) for i, device in enumerate(video_devices)]
