@@ -21,6 +21,7 @@ import numpy as np
 import wave
 import errno
 import sqlite3
+from db.db_conn import connect_sqlite, create_table, get_transmisiones, insert_transmision
 
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "statics/audio_output.wav"
@@ -96,24 +97,7 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
             win32file.CloseHandle(audio_pipe)
         else:
             audio_pipe.close()
-
-def video_audio_stream(video_path, stop_event):
-    command = [
-        'ffmpeg',
-        '-i', video_path,
-        '-vn',  # No video
-        '-f', 'wav',
-        'pipe:1'
-    ]
-    audio_process = subprocess.Popen(command, stdout=subprocess.PIPE)
-
-    while not stop_event.is_set():
-        audio_data = audio_process.stdout.read(4096)
-        if not audio_data:
-            break
-        audio_queue.put(audio_data)
-
-    audio_process.terminate()
+            #os.remove(pipe_name)
 
 video_pipe_name = r'\\.\pipe\video_pipe' if PLATFORM == 'Windows' else 'video_pipe'
 audio_pipe_name = r'\\.\pipe\audio_pipe' if PLATFORM == 'Windows' else 'audio_pipe'
@@ -158,10 +142,10 @@ def extract_audio(video_path, audio_path):
 
 global video_pipe
 video_pipe = None
-#global audio_pipe
-#video_pipe = create_pipe(video_pipe_name)
-#audio_pipe = create_pipe(audio_pipe_name)  
-
+conn, cursor = connect_sqlite()
+create_table(cursor)
+conn.commit()
+  
 def HomeView(page: Router):
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
     YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2/{}"
@@ -180,29 +164,7 @@ def HomeView(page: Router):
     global current_input
     current_input = 0
     input_changed = False
-    
-    def connect_sqlite():
-      conn = sqlite3.connect('statics/data.db')
-      cursor = conn.cursor()
-      return conn, cursor
-    
-    def create_table(cursor):
-      cursor.execute('''CREATE TABLE IF NOT EXISTS transmisiones
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      plataforma TEXT NOT NULL,
-                      key TEXT NOT NULL)''')
-
-    def get_transmisiones(cursor):
-      cursor.execute("SELECT * FROM transmisiones")
-      return cursor.fetchall()      
-    def insert_transmision(cursor, plataforma, key):
-      cursor.execute("DELETE FROM transmisiones WHERE plataforma = ?", (plataforma,))
-      cursor.execute("INSERT INTO transmisiones (plataforma, key) VALUES (?, ?)", (plataforma, key))
-      
-    conn, cursor = connect_sqlite()
-    create_table(cursor)
-    conn.commit()
-      
+     
     def on_change_drop_list(e):
       global input_changed
       global current_input
@@ -218,7 +180,6 @@ def HomeView(page: Router):
       checkbox_label = e.control.label
       platform_Inputs[platforms.index(checkbox_label)].disabled = not e.control.value
       page.update()
-    frame_queue = queue.Queue(maxsize=100)  # Cola para los frames en vivo, con tamaño máximo
     global process 
     process = None
     platforms = ["Facebook", "Youtube", "X", "Otro"]
@@ -519,11 +480,6 @@ def HomeView(page: Router):
         preview_container.content = video
         preview_container.update()
         page.update()
-        #preview_container.update()  
-        #page.update()
-        
-        #preview_container.update()
-        #page.update()
 
       current_curtain_selected = e.control.key
       video.playlist_add(ft.VideoMedia(e.control.key))
@@ -531,11 +487,7 @@ def HomeView(page: Router):
       video.update()
       page.update()
       print("Video añadido", video.playlist)
-      #video.update()
-      #video.update()
-      #preview_container.update()
       streaming_and_preview_row.update()
-      #page.update()
       video_added = True      
       extract_audio_thread = threading.Thread(target=extract_audio, args=(current_curtain_selected, AUDIO_OUTPUT))
       extract_audio_thread.start()
@@ -603,9 +555,6 @@ def HomeView(page: Router):
                         audio_devices.append(device_name) 
       return video_devices, audio_devices
     
-    def play_audio(audio_device):
-      subprocess.run(['ffplay', '-nodisp', '-autoexit', '-f', 'dshow', '-i', f'audio={audio_device}'])  
-
     def capture_curtain_video():
         global curtain_video_cap
         global stream_started
@@ -975,6 +924,3 @@ def HomeView(page: Router):
         )
 
     return content
-
-
-## MAKE 7 - 7 SECUENCE UNTIL 177
