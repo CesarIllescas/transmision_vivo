@@ -7,7 +7,9 @@ def main(page: ft.Page):
     page.title = "SICOM Studio"
     page.appbar = AppBar(page)
     page.on_route_change = router.route_change
-    page.window_full_screen = True
+    page.on_error = lambda e: print("Page error:", e.data)
+    page.on_disconnect = lambda e: print("Disconnected from server")
+    page.on_connect = lambda e: print("Connected to server")
     router.page = page
     page.add(
         router.body

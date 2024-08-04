@@ -227,7 +227,7 @@ def HomeView(page: Router):
     platform_Inputs = [
             ft.TextField(
                 label=platform, 
-                height=45, 
+                height=60, 
                 width=230, 
                 disabled=True, 
                 value=key_dict.get(platform, "")
