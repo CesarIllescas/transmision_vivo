@@ -21,6 +21,7 @@ import numpy as np
 import wave
 import errno
 import sqlite3
+from db.db_conn import connect_sqlite, create_table, get_transmisiones, insert_transmision
 
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "statics/audio_output.wav"
