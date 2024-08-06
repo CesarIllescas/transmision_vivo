@@ -29,7 +29,7 @@ if PLATFORM == 'Windows':
     import win32pipe
     import win32file
 
-channels = 1
+channels = 2
 rate = 44100
 chunk = 1024
 
@@ -89,11 +89,10 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
                     if platform.system() == 'Windows':
                         win32file.WriteFile(audio_pipe, audio_data)
                     else:
-                        print("prueba")
                         # timestamp = time.time()
                         # audio_queue.put((timestamp, audio_data))
-                        #audio_pipe.write(audio_data)
-                        #audio_pipe.flush()
+                        audio_pipe.write(audio_data)
+                        audio_pipe.flush()
 
     except Exception as e:
         print(f"Error in microphone_audio_stream: {e}")
@@ -340,7 +339,7 @@ def HomeView(page: Router):
             '-thread_queue_size', '4096',
             '-i', video_pipe_name,
             '-f', 's16le',
-            '-ac', '1',
+            '-ac', '2',
             '-ar', '44100',
             '-thread_queue_size', '4096',
             '-i', audio_pipe_name,
@@ -417,6 +416,7 @@ def HomeView(page: Router):
         global video_pipe
         global audio_pipe
         global video_pipe_created
+        global audio_pipe_created
         thread = None
         for checkbox in platform_drop_list:
             if checkbox.value:
@@ -444,8 +444,9 @@ def HomeView(page: Router):
             video_pipe = create_pipe(video_pipe_name)
             video_pipe_created = True
             print("video_pipe creado")
-            # audio_pipe = create_pipe(audio_pipe_name)
-            # print("audio_pipe creado")
+            audio_pipe = create_pipe(audio_pipe_name)
+            audio_pipe_created = True
+            print("audio_pipe creado")
 
     global curtain_thread_started
     global video_thread_started
@@ -659,7 +660,7 @@ def HomeView(page: Router):
                 if not ret:
                     curtain_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
-                curtain_frame = cv2.resize(curtain_frame, (1280, 720))
+                curtain_frame = cv2.resize(curtain_frame, (1280, 720), interpolation=cv2.INTER_LINEAR)
                 # curtain_frame = cv2.cvtColor(curtain_frame, cv2.COLOR_BGR2RGB)
                 # curtain_frame = cv2.cvtColor(curtain_frame, cv2.COLOR_RGB2BGR)
 
@@ -733,8 +734,11 @@ def HomeView(page: Router):
                         rate=rate,
                         input=True,
                         frames_per_buffer=chunk)
+        fps = 30
+        frame_duration = 1 / fps
         try:
             while True:
+                start_time = time.time()
                 if input_changed:
                     stream_video_cap.release()
                     if PLATFORM == 'Windows':
@@ -784,20 +788,25 @@ def HomeView(page: Router):
                         try:
                             # timestamp = time.time()
                             # video_queue.put((timestamp, camera_frame.tobytes()))
-                            if audio_pipe_created
-                  
-                              audio_data = stream.read(chunk, exception_on_overflow=False)
-                              audio_pipe.write(audio_data)
-                              audio_pipe.flush()
-                              print("Audio enviado")
+                            #audio_pipe = create_pipe(pipe_name)
+                            #audio_pipe_created = True
+                            video_pipe.write(camera_frame.tobytes())
+                            video_pipe.flush()
+                            #if audio_pipe_created:
+                            #  audio_data = stream.read(chunk, exception_on_overflow=False)
+                            #  audio_pipe.write(audio_data)
+                            #  audio_pipe.flush()
                        
-                              video_pipe.write(camera_frame.tobytes())
-                              video_pipe.flush()
-                              print("Video enviado")
+                            
                               # video_queue.put(camera_frame.tobytes())
                         except Exception as e:
                             print(f"Error en capture_camera_video: {e}")
+                    end_time = time.time()
+                    elapsed_time = end_time - start_time
+                    sleep_time = frame_duration - elapsed_time
 
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
                 if stream_started == False:
                     print("Transmisión detenida")
                     video_pipe.close()
