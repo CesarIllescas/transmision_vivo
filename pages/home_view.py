@@ -45,7 +45,7 @@ audio_queue = queue.Queue(maxsize=100)
 video_queue = queue.Queue(maxsize=100)
 
 
-def microphone_audio_stream(pipe_name, event, current_curtain_selected):
+def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_device_index=None):
     global audio_pipe
     global curtain
     global audio_pipe_created
@@ -57,7 +57,8 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected):
                         channels=1,
                         rate=rate,
                         input=True,
-                        frames_per_buffer=chunk)
+                        frames_per_buffer=chunk,
+                        input_device_index=audio_device_index)
     if platform.system() == 'Windows':
         connect_pipe(audio_pipe)
     try:
@@ -325,7 +326,7 @@ def HomeView(page: Router):
         if not video_thread_started:
             video_thread_started = True
             audio_thread = threading.Thread(target=microphone_audio_stream, args=(
-                audio_pipe_name, None, current_curtain_selected))
+                audio_pipe_name, None, current_curtain_selected, int(audio_drop_list.value)))
             audio_thread.start()
 
         command = [
@@ -718,6 +719,12 @@ def HomeView(page: Router):
         global audio_pipe_created
         global video_pipe_created
         started = True
+        pipeline = (
+            'decklinkvideosrc mode=1080p30 ! videoconvert ! appsink'
+        )
+
+
+
         if PLATFORM == 'Windows':
             stream_video_cap = cv2.VideoCapture(int(0), cv2.CAP_DSHOW)
         else:
@@ -733,7 +740,8 @@ def HomeView(page: Router):
                         channels=1,
                         rate=rate,
                         input=True,
-                        frames_per_buffer=chunk)
+                        frames_per_buffer=chunk,
+                        )
         fps = 30
         frame_duration = 1 / fps
         try:
@@ -745,7 +753,10 @@ def HomeView(page: Router):
                         stream_video_cap = cv2.VideoCapture(
                             int(0), cv2.CAP_DSHOW)
                     else:
-                        stream_video_cap = cv2.VideoCapture(int(current_input))
+                        if (current_input == '10'):
+                            stream_video_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                        else:
+                            stream_video_cap = cv2.VideoCapture(int(current_input))
                     stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                     stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
@@ -849,11 +860,138 @@ def HomeView(page: Router):
             time.sleep(0.01)
     # sincronize_thread = threading.Thread(target=synchronize_and_send)
     # sincronize_thread.start()
+    def capture_blackmagic():
+        global video_pipe
+        global stream_video_cap
+        global input_changed
+        global current_input
+        global video_queue
+        global process
+        global audio_pipe
+        global audio_pipe_created
+        global video_pipe_created
+        started = True
+        pipeline = (
+            'decklinkvideosrc mode=1080p30 ! '
+            'videoconvert ! '
+            'appsink'
+        )
+        if PLATFORM == 'Windows':
+            stream_video_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        else:
+            stream_video_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        global stream_started
+        stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
+        # if PLATFORM == 'Windows':
+        #   win32pipe.ConnectNamedPipe(video_pipe, None)
+        p = pyaudio.PyAudio()
+        stream = p.open(format=pyaudio.paInt16,
+                        channels=1,
+                        rate=rate,
+                        input=True,
+                        frames_per_buffer=chunk,
+                        input_device_index=int(audio_drop_list.value))
+        fps = 30
+        frame_duration = 1 / fps
+        try:
+            while True:
+                start_time = time.time()
+                if input_changed:
+                    stream_video_cap.release()
+                    if PLATFORM == 'Windows':
+                        stream_video_cap = cv2.VideoCapture(
+                            int(0), cv2.CAP_DSHOW)
+                    else:
+                        stream_video_cap = cv2.VideoCapture(int(current_input))
+                    stream_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    stream_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
+                    input_changed = False
+                ret, camera_frame = stream_video_cap.read()
+                if not ret:
+                    print("No se pudo leer el fotograma de la cámara")
+
+                    break
+
+                camera_frame = cv2.resize(camera_frame, (1280, 720))
+                ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
+                camera_frame_base64 = base64.b64encode(
+                    camera_frame_bytes).decode('utf-8')
+
+                if curtain and camera_frame_base64:
+                    if img_preview:
+                        img_preview.src_base64 = camera_frame_base64
+                    if preview_container:
+                        preview_container.content = img_preview
+                        # page.update()
+                        streaming_and_preview_row.update()
+                        preview_container.update()
+                else:
+                    if img_live and camera_frame_base64:
+                        img_live.src_base64 = camera_frame_base64
+                        live_container.content = img_live
+                        # page.update()
+                        img_live.update()
+                    if live_container:
+                        live_container.update()
+                    # if stream_started:
+                        # if stream_started:
+                        # time.sleep(10)
+                        # stream_started = False
+                        # process.stdin.write(camera_frame.tobytes())
+                    # if PLATFORM == 'Windows' and stream_started:
+                    #   win32file.WriteFile(video_pipe, camera_frame.tobytes())
+                    if stream_started and not PLATFORM == 'Windows':
+                        try:
+                            # timestamp = time.time()
+                            # video_queue.put((timestamp, camera_frame.tobytes()))
+                            #audio_pipe = create_pipe(pipe_name)
+                            #audio_pipe_created = True
+                            video_pipe.write(camera_frame.tobytes())
+                            video_pipe.flush()
+                            #if audio_pipe_created:
+                            #  audio_data = stream.read(chunk, exception_on_overflow=False)
+                            #  audio_pipe.write(audio_data)
+                            #  audio_pipe.flush()
+                       
+                            
+                              # video_queue.put(camera_frame.tobytes())
+                        except Exception as e:
+                            print(f"Error en capture_camera_video: {e}")
+                    end_time = time.time()
+                    elapsed_time = end_time - start_time
+                    sleep_time = frame_duration - elapsed_time
+
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                if stream_started == False:
+                    print("Transmisión detenida")
+                    video_pipe.close()
+
+        except Exception as e:
+            print(f"Error en capture_camera_video: {e}")
+
+        finally:
+            stream_video_cap.release()
+            print("Cámara liberada")
+            if PLATFORM == 'Windows':
+                win32pipe.DisconnectNamedPipe(video_pipe)
+                win32file.CloseHandle(video_pipe)
+            if not PLATFORM == 'Windows' and stream_started:
+                video_pipe.close()
+                # os.remove(pipe_name)
+            # frame_queue.put(camera_frame.tobytes())
+
+                # time.sleep(1 / 30.0)  # Control de la velocidad de fotogramas
+  
+    
     video_devices, audio_devices = show_devices()
 
     options = [ft.dropdown.Option('1', "Grabar pantalla")] + [ft.dropdown.Option(
         key=str(i), text=device) for i, device in enumerate(video_devices)]
-
+    options.append(ft.dropdown.Option('10', "Blackmagic"))
     drop_list = ft.Dropdown(
         width=380,
         options=options,
