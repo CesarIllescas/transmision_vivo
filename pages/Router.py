@@ -15,6 +15,7 @@ class Router:
         self.data = dict()
         self.routes = {}
         self.body = ft.Container()
+        self.dialog = ft.AlertDialog()
 
     def set_route(self, stub: str, view: Callable):
         self.routes[stub] = view
@@ -50,6 +51,10 @@ class Router:
     def set_overlay(self, overlay):
         self.page.overlay.append(overlay)
         self.page.update()
-
     async def update_async(self):
         await self.page.add_async(self.body)
+
+    def set_dialog(self, dialog: ft.AlertDialog):
+        self.dialog = dialog
+        self.page.add(self.dialog)
+        self.page.update()

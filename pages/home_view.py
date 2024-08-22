@@ -22,9 +22,24 @@ import wave
 import errno
 import sqlite3
 from db.db_conn import connect_sqlite, create_table, get_transmisiones, insert_transmision
-
+import gi
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst, GLib
+import cv2
+import threading
+import time
+import os
+os.environ["GST_DEBUG"] = "3"
+global gstreamer_pipeline
+gstreamer_pipeline = None
+global selector_live
+selector_live = None
+global selector_video
+selector_video = None
+ffmpeg = True
 PLATFORM = platform.system()
 AUDIO_OUTPUT = "statics/audio_output.wav"
+VIDEO_OUTPUT = "statics/video_output.mp4"
 if PLATFORM == 'Windows':
     import win32pipe
     import win32file
@@ -47,9 +62,14 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_de
     global audio_pipe
     global curtain
     global audio_pipe_created
+    global current_input
     audio_pipe = create_pipe(pipe_name)
     audio_pipe_created = True
     print("audio pipe creado")
+    if current_input == '10':
+        audio_device_index = 0
+    else:
+        audio_device_index = None
     p = pyaudio.PyAudio()
     try:
         stream = p.open(format=pyaudio.paInt16,
@@ -57,7 +77,7 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_de
                     rate=rate,
                     input=True,
                     frames_per_buffer=chunk,
-                    input_device_index=0)
+                    input_device_index=audio_device_index)
     except Exception as e:
         print(f"Failed to open audio stream: {e}")
     if platform.system() == 'Windows':
@@ -142,7 +162,9 @@ def connect_pipe(pipe):
         print(f"Connected to pipe: {pipe}")
 
 
-def extract_audio(video_path, audio_path):
+
+
+def extract_audio(video_path, audio_path, video_output, width, height):
     command = [
         'ffmpeg',
         '-y',
@@ -151,13 +173,80 @@ def extract_audio(video_path, audio_path):
         '-map', 'a',
         audio_path]
     subprocess.run(command)
-
-
 global video_pipe
 video_pipe = None
 global audio_pipe
 audio_pipe = None
+def adaptive_resize(frame, target_width, target_height, performance_mode=False):
+    original_height, original_width = frame.shape[:2]
 
+    aspect_ratio_original = original_width / original_height
+    aspect_ratio_target = target_width / target_height
+
+    if aspect_ratio_original > aspect_ratio_target:
+        new_width = target_width
+        new_height = int(target_width / aspect_ratio_original)
+    else:
+        new_height = target_height
+        new_width = int(target_height * aspect_ratio_original)
+
+    if performance_mode:
+        resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+    else:
+        resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
+    final_frame = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+    x_offset = (target_width - new_width) // 2
+    y_offset = (target_height - new_height) // 2
+
+    final_frame[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = resized_frame
+
+    return final_frame
+
+Gst.init(None)
+def start_gstreamer_pipeline():
+    pipeline_str = (
+    "input-selector name=selector_live ! "
+    "videoconvert ! "
+    "videoscale ! "
+    "video/x-raw,width=1280,height=720,format=I420 ! "
+    "x264enc bitrate=1500 speed-preset=ultrafast tune=zerolatency ! "
+    "flvmux name=mux ! rtmpsink location='rtmp://a.rtmp.youtube.com/live2/your_stream_key'"
+)
+
+    pipeline = Gst.parse_launch(pipeline_str)
+    
+    if not pipeline:
+        print("Error al crear el pipeline de GStreamer")
+    else:
+        print("Pipeline de GStreamer creado")
+    
+    return pipeline
+
+def configure_sources(pipeline, selector_live, selector_video, source_type, source_value=None):
+    if source_type == "file":
+        file_source = Gst.parse_bin_from_description(
+            f"filesrc location=\"{source_value}\" ! decodebin ! videoconvert ! queue", True)
+        pipeline.add(file_source)
+        file_source.get_static_pad("src").link(selector_video.get_request_pad("sink_%u"))
+    elif source_type == "decklink":
+        live_source = Gst.parse_bin_from_description(
+            "decklinkvideosrc mode=auto connection=1 ! videoconvert ! queue", True)
+        pipeline.add(live_source)
+        live_source.get_static_pad("src").link(selector_live.get_request_pad("sink_%u"))
+    elif source_type == "camera":
+        live_source = Gst.parse_bin_from_description(
+            f"v4l2src device={source_value} ! videoconvert ! queue", True)
+        pipeline.add(live_source)
+        live_source.get_static_pad("src").link(selector_live.get_request_pad("sink_%u"))
+    else:
+        raise ValueError("Tipo de fuente no soportado.")
+
+def switch_input_selector(selector, pad_name):
+    pad = selector.get_static_pad(pad_name)
+    if pad:
+        selector.set_property("active-pad", pad)
 
 def HomeView(page: Router):
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
@@ -179,6 +268,12 @@ def HomeView(page: Router):
     input_changed = False
     global current_audio_input
     current_audio_input = 0
+    global height
+    global width
+    height = 720
+    width = 1280
+    global curtain_video_cap
+    curtain_video_cap = None
     def connect_sqlite():
         conn = sqlite3.connect('statics/data.db')
         cursor = conn.cursor()
@@ -209,6 +304,7 @@ def HomeView(page: Router):
         global current_input
         input_changed = True
         current_input = e.control.value
+        print("Input changed to", current_input)
         page.update()
 
     def on_change_server_input(e):
@@ -280,6 +376,8 @@ def HomeView(page: Router):
     def stream_webcam(container: ft.Container):
         global video_pipe
         global current_audio_input
+        global height
+        global width
         streams = ""
         i = 1
         for checkbox in platform_drop_list:
@@ -305,14 +403,13 @@ def HomeView(page: Router):
             audio_thread = threading.Thread(target=microphone_audio_stream, args=(
                 audio_pipe_name, None, current_curtain_selected, 0))
             audio_thread.start()
-
         command = [
             'ffmpeg',
             '-y',
             '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
             '-pixel_format', 'bgr24',
-            '-s', '640x360',
+            '-s', f'{width}x{height}',
             '-framerate', '30',
             '-thread_queue_size', '4096',
             '-i', video_pipe_name,
@@ -327,9 +424,10 @@ def HomeView(page: Router):
             '-c:a', 'aac',
             '-preset', 'ultrafast',
             '-tune', 'zerolatency',
-            '-b:v', '1500k',
-            '-maxrate', '4500k',
-            '-bufsize', '512k',
+            '-b:v', '6800k', 
+            '-maxrate', '6800k', 
+            '-bufsize', '13600k',  
+            '-b:a', '128k',
             '-pix_fmt', 'yuv420p',
             '-r', '30',
             '-g', '60',
@@ -341,9 +439,48 @@ def HomeView(page: Router):
             target=execute_ffmpeg, args=(command,))
         ffmpeg_thread.start()
         
+
     def execute_ffmpeg(command):
-        process = subprocess.Popen(command, stdin=subprocess.PIPE)
-        return process
+        try:
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+            def read_stderr():
+                while True:
+                    line = process.stderr.readline()
+                    if line:
+                        handle_ffmpeg_error(line.strip())
+                    else:
+                        break
+            
+            stderr_thread = threading.Thread(target=read_stderr)
+            stderr_thread.start()
+            
+            process.wait()
+            stderr_thread.join()
+
+        except Exception as e:
+            handle_ffmpeg_error(f"Error al ejecutar FFmpeg: {str(e)}")
+
+
+    def handle_ffmpeg_error(error_message):
+        lower_message = error_message.lower()
+        
+        error_keywords = ["error", "failed", "invalid", "broken pipe", "cannot", "unable"]
+
+        if any(keyword in lower_message for keyword in error_keywords):
+            print(f"FFmpeg Error: {error_message}") 
+            show_error_alert(error_message)
+    def show_error_alert(error_message):
+        alert = ft.AlertDialog(
+            title=ft.Text("Error"),
+            content=ft.Text(error_message),
+            actions=[
+                ft.TextButton("Cerrar", on_click=lambda e: alert.close())
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            open=True
+        )
+        page.set_dialog(alert)
 
     def capture_screen(container: ft.Container):
         youtube_key = "yj7j-fuzw-7370-6956-38t8"
@@ -395,65 +532,107 @@ def HomeView(page: Router):
         global video_pipe_created
         global audio_pipe_created
         thread = None
-        for checkbox in platform_drop_list:
-            if checkbox.value:
-                key = platform_Inputs[platform_drop_list.index(checkbox)].value
-                insert_transmision(cursor, checkbox.label, key)
-        conn.commit()
-        if PLATFORM == 'Windows':
-            connect_pipe(video_pipe)
-        if drop_list.value == '1' and not stream_started:
-            thread = threading.Thread(target=capture_screen, args=(
-                content._get_children()[0]._get_children()[0],))
-            thread.start()
-        elif drop_list.value != '1' and not stream_started:
-            thread = threading.Thread(target=stream_webcam, args=(
-                content._get_children()[0]._get_children()[0],))
-            thread.start()
-        if stream_started:
-            stream_started = False
-            stream_button.text = "Iniciar transmisión"
-        else:
+        if not stream_started:
+            for checkbox in platform_drop_list:
+                if checkbox.value:
+                    key = platform_Inputs[platform_drop_list.index(checkbox)].value
+                    insert_transmision(cursor, checkbox.label, key)
+            conn.commit()
+            if PLATFORM == 'Windows':
+                connect_pipe(video_pipe)
+            if drop_list.value == '1' and not stream_started:
+                thread = threading.Thread(target=capture_screen, args=(
+                    content._get_children()[0]._get_children()[0],))
+                thread.start()
+            elif drop_list.value != '1' and not stream_started and ffmpeg:
+                thread = threading.Thread(target=stream_webcam, args=(
+                    content._get_children()[0]._get_children()[0],))
+                thread.start()
+            elif drop_list.value != '1' and not stream_started and not ffmpeg:
+                thread = threading.Thread(target=manage_Gstreamer)
+                thread.start()
             stream_started = True
             stream_button.text = "Detener transmisión"
+            if PLATFORM == 'Darwin':
+                video_pipe = create_pipe(video_pipe_name)
+                video_pipe_created = True
+                audio_pipe = create_pipe(audio_pipe_name)
+                audio_pipe_created = True
+        else:
+            stream_started = False
+            stream_button.text = "Iniciar transmisión"
+            video_pipe.close()
+            audio_pipe.close()
+            
         stream_button.update()
-        if PLATFORM == 'Darwin':
-            video_pipe = create_pipe(video_pipe_name)
-            video_pipe_created = True
-            print("video_pipe creado")
-            audio_pipe = create_pipe(audio_pipe_name)
-            audio_pipe_created = True
-            print("audio_pipe creado")
+
 
     global curtain_thread_started
     global video_thread_started
     video_thread_started = False
     curtain_thread_started = False
+    def manage_Gstreamer():
+        global gstreamer_pipeline, selector_live, selector_video
+        gstreamer_pipeline = start_gstreamer_pipeline()
+        selector_live = gstreamer_pipeline.get_by_name("selector_live")
+        selector_video = gstreamer_pipeline.get_by_name("selector_video")
+        print("selector_live", selector_live)
+        print(selector_video)
+        gstreamer_pipeline.set_state(Gst.State.PLAYING)
 
+        def on_source_selected(source_type, source_value=None):
+            configure_sources(gstreamer_pipeline, selector_live, selector_video, source_type, source_value)
+
+        on_source_selected("decklink")
+        print("Decklink iniciado")
+        loop = GLib.MainLoop()
+        try:
+            print("Ejecutando el MainLoop de GStreamer...")
+            loop.run()
+        except Exception as e:
+            print(f"Error en el MainLoop: {e}")
+        finally:
+            print("Cerrando el pipeline de GStreamer...")
+            gstreamer_pipeline.set_state(Gst.State.NULL)
+
+        # Limpiar
+        pipeline.set_state(Gst.State.NULL)
     def show_curtain(e):
         global curtain
         global curtain_thread_started
         global stream_video_added
         global current_curtain_selected
         global process
+        global curtain_video_cap  
+        global gstreamer_pipeline
+        global selector_video
+        global selector_live
+
         if curtain == False:
             curtain = True
             live_container.content = stream_video
             live_container.update()
+
             if stream_video_added:
                 stream_video.playlist_remove(0)
+            
             stream_video.playlist_add(ft.VideoMedia(current_curtain_selected))
-            live_container.update()
             stream_video.jump_to(0)
-            live_container.update()
-            live_container.content = stream_video
             live_container.update()
             boton_cortina.text = "Detener cortina"
             boton_cortina.update()
-            #page.update()
-            live_container.update()
             stream_video_added = True
-            #page.update()
+            if not ffmpeg and gstreamer_pipeline is not None:
+                switch_input_selector(selector_video, "sink_%u")
+            if curtain_video_cap is not None:
+                curtain_video_cap.release()  
+            curtain_video_cap = cv2.VideoCapture(current_curtain_selected) 
+            
+            if not curtain_thread_started:
+                curtain_thread_started = True
+                curtain_thread = threading.Thread(target=capture_curtain_video)
+                curtain_thread.start()
+
         else:
             curtain = False
             preview_container.content = video
@@ -462,12 +641,13 @@ def HomeView(page: Router):
             preview_container.update()
             boton_cortina.text = "Iniciar cortina"
             boton_cortina.update()
-            #page.update()
-
-        if not curtain_thread_started and curtain:
-            curtain_thread_started = True
-            curtain_thread = threading.Thread(target=capture_curtain_video)
-            curtain_thread.start()
+            if not ffmpeg and gstreamer_pipeline is not None:
+                switch_input_selector(selector_live, "sink_%u")
+            
+            if curtain_video_cap is not None:
+                curtain_video_cap.release()
+                curtain_video_cap = None
+                curtain_thread_started = False  
 
     def show_file(e: ft.FilePickerResultEvent):
         for file in e.files:
@@ -518,6 +698,10 @@ def HomeView(page: Router):
         global current_curtain_selected
         global video_added
         global count
+        global height
+        global width
+        global gstreamer_pipeline, selector_video, selector_live
+
         if not video_added:
             preview_container.content = video
             preview_container.update()
@@ -529,8 +713,9 @@ def HomeView(page: Router):
             preview_container.content = video
             preview_container.update()
             #page.update()
-
         current_curtain_selected = e.control.key
+        if not ffmpeg and gstreamer_pipeline is not None:
+            configure_sources(gstreamer_pipeline, selector_live, selector_video, "file", current_curtain_selected)
         video.playlist_add(ft.VideoMedia(e.control.key))
         video.jump_to(0)
         video.update()
@@ -539,7 +724,7 @@ def HomeView(page: Router):
         streaming_and_preview_row.update()
         video_added = True
         extract_audio_thread = threading.Thread(
-            target=extract_audio, args=(current_curtain_selected, AUDIO_OUTPUT))
+            target=extract_audio, args=(current_curtain_selected, AUDIO_OUTPUT, VIDEO_OUTPUT, width, height))
         extract_audio_thread.start()
 
     def generate_video_thumbnail(file_path):
@@ -605,44 +790,39 @@ def HomeView(page: Router):
                             audio_devices.append(device_name)
         return video_devices, audio_devices
 
-    def play_audio(audio_device):
-        subprocess.run(['ffplay', '-nodisp', '-autoexit', '-f',
-                       'dshow', '-i', f'audio={audio_device}'])
-
     def capture_curtain_video():
         global curtain_video_cap
         global stream_started
-        curtain_video_cap = cv2.VideoCapture(current_curtain_selected)
-        #curtain_video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        #curtain_video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        curtain_video_cap.set(cv2.CAP_PROP_FPS, 30)
-        #curtain_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        global height
+        global width
+        global ffmpeg
         fps = 30
         frame_duration = 1 / fps
-        while True:
+        target_width, target_height = width, height
+        while curtain:
             start_time = time.time()
-            if curtain:
-                ret, curtain_frame = curtain_video_cap.read()
-                if not ret:
-                    curtain_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                curtain_frame = cv2.resize(curtain_frame, (640, 360), interpolation=cv2.INTER_LINEAR)
+            ret, curtain_frame = curtain_video_cap.read()
+            if not ret:
+                curtain_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  
+                continue
 
+            curtain_frame = adaptive_resize(curtain_frame, target_width, target_height, performance_mode=True)
+            if ffmpeg:
                 if PLATFORM == 'Windows':
                     win32file.WriteFile(video_pipe, curtain_frame.tobytes())
-                video_pipe.write(curtain_frame.tobytes())
-                video_pipe.flush()
-                end_time = time.time()
-                elapsed_time = end_time - start_time
-                sleep_time = frame_duration - elapsed_time
+                else:
+                    video_pipe.write(curtain_frame.tobytes())
+                    video_pipe.flush()
 
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-            if not stream_started:
-                break
-        curtain_video_cap.release()
-        if PLATFORM == 'Windows':
-            win32file.CloseHandle(video_pipe)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            sleep_time = frame_duration - elapsed_time
+
+            # if sleep_time > 0:
+            #     time.sleep(sleep_time)
+        if curtain_video_cap is not None:
+            curtain_video_cap.release()
+        curtain_video_cap = None
 
     def capture_camera_video(pipe_name):
         global video_pipe
@@ -654,6 +834,9 @@ def HomeView(page: Router):
         global audio_pipe
         global audio_pipe_created
         global video_pipe_created
+        global height
+        global width
+        global ffmpeg
         started = True
         pipeline = 'decklinkvideosrc mode=auto connection=1 ! videoconvert ! appsink'
         try:
@@ -666,25 +849,38 @@ def HomeView(page: Router):
         global stream_started
         if not stream_video_cap.isOpened():
             print("Error al abrir el pipeline GStreamer")
-        p = pyaudio.PyAudio()
-        stream = p.open(format=pyaudio.paInt16,
-                        channels=2,
-                        rate=rate,
-                        input=True,
-                        frames_per_buffer=chunk,
-                        )
         fps = 30
         frame_duration = 1 / fps
+        p = pyaudio.PyAudio()
+        p.open(
+            format=pyaudio.paInt16,
+            channels=2,
+            rate=rate,
+            input=True,
+            frames_per_buffer=chunk
+        )
         try:
             while True:
                 start_time = time.time()
+                if input_changed:
+                    stream_video_cap.release()
+                    if PLATFORM == 'Windows':
+                        stream_video_cap = cv2.VideoCapture(
+                            int(0), cv2.CAP_DSHOW)
+                    else:
+                        if (current_input == '10'):
+                            stream_video_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                        else:
+                            stream_video_cap = cv2.VideoCapture(int(current_input))
+                    input_changed = False
                 ret, camera_frame = stream_video_cap.read()
+
                 if not ret:
                     print("No se pudo leer el fotograma de la cámara")
-                    break
-
-                camera_frame = cv2.resize(camera_frame, (640, 360))
-                ret, camera_frame_bytes = cv2.imencode('.png', camera_frame)
+                    pass
+                height, width, _ = camera_frame.shape
+                camera_frame2 = cv2.resize(camera_frame, (640, 480))
+                ret, camera_frame_bytes = cv2.imencode('.png', camera_frame2)
                 camera_frame_base64 = base64.b64encode(
                     camera_frame_bytes).decode('utf-8')
 
@@ -702,7 +898,7 @@ def HomeView(page: Router):
                         img_live.update()
                     if live_container:
                         live_container.update()
-                    if stream_started and not PLATFORM == 'Windows':
+                    if stream_started and not PLATFORM == 'Windows' and ffmpeg:
                         try:
                             video_pipe.write(camera_frame.tobytes())
                             video_pipe.flush()
@@ -712,7 +908,6 @@ def HomeView(page: Router):
                     elapsed_time = end_time - start_time
                     sleep_time = frame_duration - elapsed_time
                 if stream_started == False:
-                    print("Transmisión detenida")
                     video_pipe.close()
 
         except Exception as e:
