@@ -56,5 +56,10 @@ class Router:
 
     def set_dialog(self, dialog: ft.AlertDialog):
         self.dialog = dialog
-        self.page.add(self.dialog)
+        self.dialog.open = True  # Asegúrate de que el diálogo esté abierto
+        self.page.dialog = dialog
+        self.page.update()
+        
+    def close_dialog(self):
+        self.dialog.open = False
         self.page.update()
