@@ -5,7 +5,7 @@ from navbar.app_bar import AppBar
 def main(page: ft.Page):
     page.theme_mode = "dark"
     page.title = "SICOM Studio"
-    page.appbar = AppBar(page)
+    # page.appbar = AppBar(page)
     page.on_route_change = router.route_change
     #page.window_full_screen = True
     router.page = page
@@ -14,5 +14,7 @@ def main(page: ft.Page):
         router.body
     )
     page.go('/')
-
+    # kill all processes when the page is closed
+    page.on_close = lambda: page.window.destroy()
+    # page.on_close = lambda: print("Bye!")
 ft.app(target=main, assets_dir="assets")

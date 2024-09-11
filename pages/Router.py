@@ -17,6 +17,8 @@ class Router:
         self.body = ft.Container()
         self.dialog = ft.AlertDialog()
 
+        page.on_close = lambda: page.window.destroy()
+
     def set_route(self, stub: str, view: Callable):
         self.routes[stub] = view
     
@@ -56,5 +58,13 @@ class Router:
 
     def set_dialog(self, dialog: ft.AlertDialog):
         self.dialog = dialog
-        self.page.add(self.dialog)
+        self.dialog.open = True  # Asegúrate de que el diálogo esté abierto
+        self.page.dialog = dialog
         self.page.update()
+        
+    def close_dialog(self):
+        self.dialog.open = False
+        self.page.update()
+
+    def set_on_close(self, on_close: Callable):
+        self.page.on_close = on_close
