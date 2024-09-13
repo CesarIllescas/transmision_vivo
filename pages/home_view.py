@@ -551,14 +551,20 @@ def HomeView(page: Router):
         global started_with_curtain
         global process
         try:
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            if PLATFORM == 'Windows':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
 
-            process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                                       stderr=subprocess.PIPE,
-                                                   startupinfo=startupinfo
-                                                   )
+                process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                                    startupinfo=startupinfo
+                                                    )
+            elif PLATFORM == 'Darwin':  
+                process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                        stdout=subprocess.PIPE,  
+                                        text=True) 
 
             def read_stderr():
                 while True:
@@ -641,7 +647,7 @@ def HomeView(page: Router):
             except Exception as e:
                 log.exception(f"Error al decodificar el fotograma: {e}")
                 break
-        p.terminate()  # Terminar el proceso ffmpeg
+        p.terminate()  
 
     def on_Iniciar_transmision_click(e):
         global stream_started
@@ -852,7 +858,7 @@ def HomeView(page: Router):
 
                 cont = ft.Stack(controls=[
                     image,
-                    canvas_container  # Add the container instead of the raw canvas
+                    canvas_container  
                 ], width=200, height=50)
 
             elif file.path.lower().endswith(('.mp4', '.avi', '.webm')):
@@ -870,7 +876,7 @@ def HomeView(page: Router):
 
                 cont = ft.Stack(controls=[
                     image,
-                    canvas_container  # Add the container instead of the raw canvas
+                    canvas_container  
                 ], width=200, height=50)
 
             curtain_array.append(cont)
@@ -896,17 +902,14 @@ def HomeView(page: Router):
             preview_container.content = img_preview
             video.playlist_remove(0)
             preview_container.update()
-            #page.update()
             preview_container.content = video
             preview_container.update()
-            #page.update()
         current_curtain_selected = e.control.key
         if not ffmpeg and gstreamer_pipeline is not None:
             configure_sources(gstreamer_pipeline, selector_live, selector_video, "file", current_curtain_selected)
         video.playlist_add(ft.VideoMedia(e.control.key))
         video.jump_to(0)
         video.update()
-        #page.update()
         streaming_and_preview_row.update()
         video_added = True
         extract_audio_thread = threading.Thread(
@@ -929,10 +932,11 @@ def HomeView(page: Router):
     def show_devices():
         video_devices = []
         audio_devices = []
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
+        
         if PLATFORM == 'Windows':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
             result = subprocess.run([get_ffmpeg_path(), '-f', get_audio_backend(), '-list_devices',
                                      'true', '-i',
                                      'dummy'], capture_output=True, text=True,
