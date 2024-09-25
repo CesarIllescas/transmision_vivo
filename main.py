@@ -13,8 +13,8 @@ def main(page: ft.Page):
     page.add(
         router.body
     )
+    
     page.go('/')
-    # kill all processes when the page is closed
-    page.on_close = lambda: page.window.destroy()
-    # page.on_close = lambda: print("Bye!")
+    page.window_close = lambda: print("Window closed")
+    
 ft.app(target=main, assets_dir="assets")

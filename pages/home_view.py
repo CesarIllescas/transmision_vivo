@@ -32,17 +32,29 @@ from logger.logs import log
 from numba import njit
 from utils.numbaresize import resize_numba
 import sys
+
+running = True
 temp_video_file = 'temp_video.ts'
 
 if os.path.exists(temp_video_file):
     os.remove(temp_video_file)
 def get_ffmpeg_path():
     if hasattr(sys, '_MEIPASS'):
-        ffmpeg_path = os.path.join(sys._MEIPASS, 'ffmpeg.exe')  
+        if PLATFORM == 'Windows':
+            ffmpeg_path = os.path.join(sys._MEIPASS, 'ffmpeg.exe')
+        else:  
+            ffmpeg_path = os.path.join(sys._MEIPASS, 'ffmpeg')
     else:
         ffmpeg_path = 'ffmpeg'
 
     return ffmpeg_path
+def get_gstreamer_path():
+    if hasattr(sys, '_MEIPASS'):
+        gstreamer_path = os.path.join(sys._MEIPASS, 'gst-launch-1.0.exe')  
+    else:
+        gstreamer_path = 'gst-launch-1.0'  
+
+    return gstreamer_path
 
 def get_audio_backend():
     if PLATFORM == 'Windows':
@@ -56,7 +68,35 @@ selector_live = None
 global selector_video
 selector_video = None
 ffmpeg = True
+global ffmpeg_thread
+ffmpeg_thread = None
+global audio_thread
+audio_thread = None
+global stderr_thread
+stderr_thread = None
+global video_thread
+video_thread = None
+
 PLATFORM = platform.system()
+if PLATFORM == 'Darwin':
+    import os
+import sys
+
+def set_environment_paths():
+    if hasattr(sys, '_MEIPASS'):
+        base_path = sys._MEIPASS
+        os.environ['DYLD_LIBRARY_PATH'] = f"{base_path}/lib:{base_path}/gstreamer-1.0:{os.environ.get('DYLD_LIBRARY_PATH', '')}"
+        os.environ['GST_PLUGIN_PATH'] = f"{base_path}/gstreamer-1.0"
+        os.environ['OPENCV_VIDEOIO_PRIORITY_LIST'] = 'gst'
+    else:
+        os.environ['DYLD_LIBRARY_PATH'] = "/usr/local/lib:/opt/homebrew/lib"
+        os.environ['GST_PLUGIN_PATH'] = "/usr/local/lib/gstreamer-1.0"
+        os.environ['OPENCV_VIDEOIO_PRIORITY_LIST'] = 'gst'
+
+    os.environ['PATH'] += os.pathsep + '/opt/homebrew/bin'
+
+set_environment_paths()
+
 AUDIO_OUTPUT = "statics/audio_output.wav"
 VIDEO_OUTPUT = "statics/video_output.mp4"
 # if PLATFORM == 'Windows':
@@ -107,7 +147,7 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_de
     audio_pipe = create_pipe(pipe_name)
     audio_pipe_created = True
     audio_device_index = None
-    selected_channels = 2  
+    selected_channels = 2 
     selected_rate = 44100  
     selected_buffer = 1024  
     p = pyaudio.PyAudio()
@@ -121,11 +161,18 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_de
             input_device_index=audio_device_index
         )
     except Exception as e:
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=selected_rate,
+            input=True,
+            frames_per_buffer=selected_buffer
+        )
         log.exception(f"Error al abrir el dispositivo de audio: {e}")
     if platform.system() == 'Windows':
         connect_pipe(audio_pipe)
     try:
-        while True:
+        while running:
             if platform.system() == 'Windows':
                 win32file.WriteFile(audio_pipe, audio_data)
             else:
@@ -165,17 +212,17 @@ def microphone_audio_stream(pipe_name, event, current_curtain_selected, audio_de
             win32file.CloseHandle(audio_pipe)
         else:
             audio_pipe.close()
-
 video_pipe_name = r'\\.\pipe\video_pipe' if PLATFORM == 'Windows' else 'video_pipe'
 audio_pipe_name = r'\\.\pipe\audio_pipe' if PLATFORM == 'Windows' else 'audio_pipe'
 
+print(audio_pipe_name)
 def dummy_reader(pipe_name):
     with open(pipe_name, 'rb') as pipe:
-        while True:
+        while running:
             time.sleep(0.1)  
 def send_to_ffmpeg():
     global process
-    while True:
+    while running:
         if not video_queue.empty():
             frame = video_queue.get(block=False)
             process.stdin.write(frame)
@@ -297,6 +344,7 @@ def convert_to_frame(raw_frame, width, height):
     return np.frombuffer(raw_frame, np.uint8).reshape((height, width, 3))
 
 def HomeView(page: Router):
+    page.set_prevent_close(True)
     FACEBOOK_RTMP_URL = "rtmps://live-api-s.facebook.com:443/rtmp/{}"
     YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2/{}"
     TWITCH_RTMP_URL = "rtmp://live.twitch.tv/app/{}"
@@ -432,6 +480,50 @@ def HomeView(page: Router):
         current_audio_input = e.control.value
 
         page.update()
+    def on_close(e):
+        global running
+        global audio_thread
+        global stderr_thread
+        global stream_video_cap
+        global ffmpeg_thread
+        running = False
+        ffmpeg_thread.join() if ffmpeg_thread else None
+        audio_thread.join() if audio_thread else None
+        stderr_thread.join() if stderr_thread else None
+        stream_video_cap.release() if stream_video_cap else None
+    def yes_click(e):
+        global running
+        global audio_thread
+        global stderr_thread
+        global stream_video_cap
+        global ffmpeg_thread
+        running = False
+        ffmpeg_thread.join() if ffmpeg_thread else None
+        audio_thread.join() if audio_thread else None
+        stderr_thread.join() if stderr_thread else None
+        stream_video_cap.release() if stream_video_cap else None
+        page.destroy()
+
+    def no_click(e):
+        page.close_dialog()
+
+    def handle_window_event(e):
+        if e.data == "close":
+            page.set_dialog(confirm_dialog)
+    confirm_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Cerrando"),
+            content=ft.Text("¿Está seguro que desea cerrar la aplicación?"),
+            actions=[
+                ft.ElevatedButton("Si", on_click=yes_click),
+                ft.OutlinedButton("No", on_click=no_click),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+
+    page.set_on_close(handle_window_event)
+        
 
     def stream_webcam(container: ft.Container):
         global video_pipe
@@ -441,6 +533,10 @@ def HomeView(page: Router):
         global selected_channels
         global selected_rate
         global selected_buffer
+        global ffmpeg_thread
+        global audio_thread
+        audio_pipe_name = 'audio_pipe' if PLATFORM == 'Darwin' else r'\\.\pipe\audio_pipe'
+        video_pipe_name = 'video_pipe' if PLATFORM == 'Darwin' else r'\\.\pipe\video_pipe'
         streams = ""
         i = 1
         for checkbox in platform_drop_list:
@@ -510,11 +606,11 @@ def HomeView(page: Router):
             command = [
             get_ffmpeg_path(),
             '-y',
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
+            '-f', 'image2pipe',
+            '-vcodec', 'mjpeg',
             '-pixel_format', 'bgr24',
             '-s', f'{width}x{height}',
-            '-framerate', '30',
+            # '-framerate', '30',
             '-thread_queue_size', '4096',
             '-i', video_pipe_name,
             '-f', 's16le',
@@ -526,14 +622,18 @@ def HomeView(page: Router):
             '-map', '1:a',
             '-c:v', 'libx264',
             '-c:a', 'aac',
-            '-preset', 'veryfast',
+            '-preset', 'ultrafast',
             '-tune', 'zerolatency',
             '-b:v', '6800k', 
             '-maxrate', '6800k', 
             '-bufsize', '13600k',  
             '-b:a', '128k',
             '-pix_fmt', 'yuv420p',
-            '-r', '30',
+            # '-r', '30',
+            '-vsync', 'cfr',  # Use constant frame rate sync to avoid conflicts
+            '-async', '1',
+            '-use_wallclock_as_timestamps', '1',
+            '-copyts',
             '-g', '60',
             '-flags', '+global_header',
             '-f', 'tee',
@@ -550,6 +650,7 @@ def HomeView(page: Router):
         global stream_video_cap
         global started_with_curtain
         global process
+        global stderr_thread
         try:
             if PLATFORM == 'Windows':
                 startupinfo = subprocess.STARTUPINFO()
@@ -564,10 +665,10 @@ def HomeView(page: Router):
                 process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                         stderr=subprocess.PIPE,
                                         stdout=subprocess.PIPE,  
-                                        text=True) 
+                                        ) 
 
             def read_stderr():
-                while True:
+                while running:
                     line = process.stderr.readline().decode('utf-8')
                     if line:
                         handle_ffmpeg_error(line.strip())
@@ -630,7 +731,7 @@ def HomeView(page: Router):
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             p.terminate()
-        while True:
+        while running:
 
             frame = p.stdout.read(1920 * 1080 * 3)
             if not frame:
@@ -1046,17 +1147,18 @@ def HomeView(page: Router):
             log.exception(f"Error al abrir el pipeline GStreamer: {e}")
         global stream_started
         if not stream_video_cap.isOpened():
+            stream_video_cap = cv2.VideoCapture(int(0))
             log.error("No se pudo abrir el dispositivo de video")
         fps = 30
         frame_duration = 1 / fps
-        p = pyaudio.PyAudio()
-        p.open(
-            format=pyaudio.paInt16,
-            channels=2,
-            rate=rate,
-            input=True,
-            frames_per_buffer=chunk
-        )
+        # p = pyaudio.PyAudio()
+        # p.open(
+        #     format=pyaudio.paInt16,
+        #     channels=2,
+        #     rate=rate,
+        #     input=True,
+        #     frames_per_buffer=chunk
+        # )
         used_input = current_input
 
         count = 0
@@ -1064,7 +1166,7 @@ def HomeView(page: Router):
         stream_video_cap.set(cv2.CAP_PROP_FPS, 30)
 
         try:
-            while True:
+            while running:
                 count += 1
                 if not stream_video_cap.isOpened():
                     continue
@@ -1084,7 +1186,7 @@ def HomeView(page: Router):
                         if (current_input == '10'):
                             stream_video_cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
                         else:
-                            stream_video_cap = cv2.VideoCapture(int(current_input), cv2.CAP_GSTREAMER)
+                            stream_video_cap = cv2.VideoCapture(int(current_input))
                     input_changed = False
                 ret, camera_frame = stream_video_cap.read()
 
@@ -1096,7 +1198,9 @@ def HomeView(page: Router):
                 if not curtain:
                     if stream_started and not PLATFORM == 'Windows' and ffmpeg:
                         try:
-                            video_pipe.write(camera_frame.tobytes())
+                            success, encoded_image = cv2.imencode('.jpg', camera_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+                            video_pipe.write(encoded_image.tobytes())
                             video_pipe.flush()
                         except Exception as e:
                             pass
@@ -1117,6 +1221,7 @@ def HomeView(page: Router):
                         video_pipe.close()
 
         except Exception as e:
+            stream_video_cap.release()
             log.exception(f"Error en el hilo de la cámara: {e}")
 
         finally:
@@ -1129,7 +1234,7 @@ def HomeView(page: Router):
         global curtain
         global height
         global width
-        while True:
+        while running:
             if not video_queue_gui.empty():
                 camera_frame = video_queue_gui.get(block=False)
                 height, width, _ = camera_frame.shape if camera_frame is not None else (720, 1280, 3)
@@ -1264,7 +1369,7 @@ def HomeView(page: Router):
         target=capture_camera_video, args=(video_pipe_name,))
     camera_thread.start()
 
-    page.set_on_close(lambda: camera_thread.terminate())
+    # page.set_on_close(on_close)
     content = ft.Column(
         [
             streaming_and_preview_row,
