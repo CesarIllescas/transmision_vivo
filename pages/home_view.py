@@ -74,7 +74,6 @@ class HomeScreen(ft.Column):
         self.live_image = ft.Image(src_base64=blank, border_radius=20)
         self.preview_image = ft.Image(src_base64=blank, border_radius=20)
         self.preview_video = self._video_player()
-        self.live_video = self._video_player(show_controls=False)
         self.live_container = ft.Container(
             bgcolor=ft.colors.BLACK, width=700, height=350, content=self.live_image
         )
@@ -133,19 +132,24 @@ class HomeScreen(ft.Column):
             col={"sm": 6, "md": 4, "xl": 3},
         )
 
-    @staticmethod
-    def _video_player(show_controls: bool = True) -> ft.Video:
+    def _video_player(self, path: str | None = None) -> ft.Video:
         return ft.Video(
             expand=True,
-            playlist=[],
+            playlist=[ft.VideoMedia(path)] if path else [],
             playlist_mode=ft.PlaylistMode.LOOP,
             fill_color=ft.colors.BLACK26,
             aspect_ratio=16 / 9,
             volume=100,
             autoplay=True,
+            muted=True,
             filter_quality=ft.FilterQuality.HIGH,
-            show_controls=show_controls,
+            show_controls=True,
+            on_error=self._preview_error,
         )
+
+    def _preview_error(self, event: ft.ControlEvent) -> None:
+        if event.control is self.preview_video:
+            self._show_error("No se pudo reproducir la vista previa del video seleccionado.")
 
     def did_mount(self) -> None:
         self.router.set_prevent_close(True)
@@ -174,6 +178,8 @@ class HomeScreen(ft.Column):
             self.router.page.overlay.remove(self.file_picker)
 
     def _change_platform(self, event: ft.ControlEvent) -> None:
+        if self._closed or self._streaming or self._stream_lock.locked():
+            return
         name = event.control.label
         self.platform_keys[name].disabled = not event.control.value
         if name == "Otro":
@@ -181,6 +187,8 @@ class HomeScreen(ft.Column):
         self.update()
 
     def _change_camera(self, event: ft.ControlEvent) -> None:
+        if self._closed or self._streaming or self._stream_lock.locked():
+            return
         self.session.select_camera(event.control.value)
 
     def _settings(self) -> StreamSettings:
@@ -196,17 +204,21 @@ class HomeScreen(ft.Column):
         )
 
     def _toggle_stream(self, event: ft.ControlEvent) -> None:
-        if not self._stream_lock.acquire(blocking=False):
+        if self._closed or not self._stream_lock.acquire(blocking=False):
             return
         try:
-            self.stream_button.disabled = True
-            self.update()
+            if self._closed:
+                return
+            self._update_stream_controls(busy=True)
             if self._streaming:
                 self.session.stop_stream()
             else:
                 settings = self._settings()
+                if self._closed:
+                    return
                 self.session.start_stream(settings)
-                self.repository.save_keys(dict(settings.destinations))
+                if not self._closed:
+                    self.repository.save_keys(dict(settings.destinations))
         except ValueError as error:
             self._show_error(str(error))
         except Exception:
@@ -215,14 +227,22 @@ class HomeScreen(ft.Column):
                 "No se pudo iniciar o detener la transmisión. Revise la configuración."
             )
         finally:
-            self._streaming = self.session.is_streaming
-            self.stream_button.disabled = False
             try:
-                self._update_stream_controls()
+                if self._closed:
+                    self.session.stop_stream()
+                    self._streaming = False
+                else:
+                    self._streaming = self.session.is_streaming
+                    self._update_stream_controls()
             finally:
                 self._stream_lock.release()
 
-    def _update_stream_controls(self) -> None:
+    def _update_stream_controls(self, *, busy: bool = False) -> None:
+        if self._closed:
+            return
+        inputs_locked = busy or self._streaming
+        self.stream_button.disabled = busy
+        self.curtain_button.disabled = busy
         self.stream_button.text = (
             "Detener transmisión" if self._streaming else "Iniciar transmisión"
         )
@@ -231,31 +251,50 @@ class HomeScreen(ft.Column):
             self.audio_select,
             self.curtain_switch,
             self.file_button,
+            self.curtain_items,
             *self.platform_checks.values(),
         ):
-            control.disabled = self._streaming
+            control.disabled = inputs_locked
         for name, field in self.platform_keys.items():
-            field.disabled = self._streaming or not self.platform_checks[name].value
-        self.custom_server.disabled = self._streaming or not self.platform_checks["Otro"].value
+            field.disabled = inputs_locked or not self.platform_checks[name].value
+        self.custom_server.disabled = inputs_locked or not self.platform_checks["Otro"].value
         self.update()
 
     def _toggle_curtain(self, event: ft.ControlEvent) -> None:
+        if self._closed or self._stream_lock.locked():
+            return
         try:
-            active = self.session.toggle_curtain()
+            self.session.toggle_curtain()
         except ValueError as error:
             self._show_error(str(error))
             return
-        self.curtain_button.text = "Detener cortina" if active else "Iniciar cortina"
-        self.live_container.content = self.live_video if active else self.live_image
-        self.preview_container.content = self.preview_image if active else self.preview_video
-        self.update()
-        if active:
-            self._load_video(self.live_video, self._selected_curtain)
+        self._sync_curtain_controls()
+
+    def _sync_curtain_controls(self) -> None:
+        """Keep scene controls aligned with capture, including automatic fallback."""
+        if self._closed:
+            return
+        active = self.session.curtain_active
+        content = (
+            self.preview_image
+            if active
+            else (self.preview_video if self._selected_curtain else None)
+        )
+        button_text = "Detener cortina" if active else "Iniciar cortina"
+        if self.preview_container.content is not content or self.curtain_button.text != button_text:
+            self.preview_container.content = content
+            self.curtain_button.text = button_text
+            self.update()
 
     def _pick_files(self, event: ft.ControlEvent) -> None:
+        if self._closed or self._streaming or self._stream_lock.locked():
+            return
         self.file_picker.pick_files(allow_multiple=True, allowed_extensions=["mp4", "avi", "webm"])
 
     def _add_files(self, event: ft.FilePickerResultEvent) -> None:
+        if self._closed or self._streaming or self._stream_lock.locked():
+            return
+        first_valid_path = None
         for selected in event.files or []:
             if not selected.path:
                 continue
@@ -275,43 +314,53 @@ class HomeScreen(ft.Column):
                     on_tap=self._select_curtain,
                 )
             )
+            if first_valid_path is None:
+                first_valid_path = selected.path
         self.update()
+        if self._selected_curtain is None and first_valid_path is not None:
+            self._select_curtain_path(first_valid_path)
 
     def _select_curtain(self, event: ft.ControlEvent) -> None:
+        self._select_curtain_path(event.control.key)
+
+    def _select_curtain_path(self, path: str) -> None:
+        if self._closed or self._streaming or self._stream_lock.locked():
+            return
         try:
-            self.session.select_curtain(event.control.key)
+            self.session.select_curtain(path)
         except ValueError as error:
             self._show_error(str(error))
             return
-        self._selected_curtain = event.control.key
-        self.live_container.content = self.live_image
-        self.preview_container.content = self.preview_video
-        self.curtain_button.text = "Iniciar cortina"
-        self.update()
-        self._load_video(self.preview_video, self._selected_curtain)
-
-    @staticmethod
-    def _load_video(player: ft.Video, path: str) -> None:
-        if player.playlist:
-            player.playlist_remove(0)
-        player.playlist_add(ft.VideoMedia(path))
-        player.jump_to(0)
+        self._selected_curtain = path
+        # The native player reads its initial playlist while it mounts. Method calls
+        # sent immediately after a Flet update can precede native player readiness.
+        self.preview_video = self._video_player(path)
+        self._sync_curtain_controls()
 
     async def _refresh_preview(self) -> None:
         while not self._closed:
+            self._sync_curtain_controls()
             try:
-                frame, curtain_active = self.session.preview_frames.get_nowait()
+                camera_frame, _ = self.session.preview_frames.get_nowait()
             except queue.Empty:
                 pass
             else:
-                image = self.preview_image if curtain_active else self.live_image
-                image.src_base64 = encode_preview(frame)
-                # The preview image is mounted only while the curtain is on air.
-                if image.page is not None:
-                    image.update()
-            if self._streaming and not self.session.is_streaming and not self._stream_lock.locked():
-                self._streaming = False
-                self._update_stream_controls()
+                self._update_image(self.preview_image, camera_frame)
+            try:
+                live_frame = self.session.live_frames.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                self._update_image(self.live_image, live_frame)
+            # Starting a stream can hold the session lock while audio is extracted.
+            # Never wait for that lock from the Flet event loop.
+            if self._stream_lock.acquire(blocking=False):
+                try:
+                    if self._streaming and not self.session.is_streaming:
+                        self._streaming = False
+                        self._update_stream_controls()
+                finally:
+                    self._stream_lock.release()
             try:
                 error = self.session.errors.get_nowait()
             except queue.Empty:
@@ -320,7 +369,15 @@ class HomeScreen(ft.Column):
                 self._show_error(error)
             await asyncio.sleep(1 / 30)
 
+    @staticmethod
+    def _update_image(image: ft.Image, frame: np.ndarray) -> None:
+        if image.page is not None:
+            image.src_base64 = encode_preview(frame)
+            image.update()
+
     def _show_error(self, message: str) -> None:
+        if self._closed:
+            return
         self.router.set_dialog(
             ft.AlertDialog(
                 modal=True,

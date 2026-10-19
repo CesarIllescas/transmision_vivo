@@ -90,12 +90,20 @@ class MediaCommandsTests(unittest.TestCase):
 
     def test_curtain_command_accepts_stdin_and_configurable_pcm_audio(self):
         command = build_curtain_stream_command(
-            "-", "audio pipe", 1280, 720, 1, 44100, "destination", ffmpeg_path="ffmpeg"
+            "-",
+            "audio pipe",
+            1280,
+            720,
+            1,
+            44100,
+            "destination",
+            ffmpeg_path="ffmpeg",
+            platform_name="Windows",
         )
         self.assertEqual(values_for_option(command, "-i"), ["-", "audio pipe"])
         self.assertEqual(values_for_option(command, "-framerate"), ["30"])
         self.assertLess(command.index("-framerate"), command.index("-i"))
-        self.assertEqual(values_for_option(command, "-s"), ["1280x720"])
+        self.assertIn("scale=1280:720:", values_for_option(command, "-vf")[0])
         self.assertEqual(values_for_option(command, "-ac"), ["1"])
         self.assertEqual(values_for_option(command, "-ar"), ["44100"])
         self.assertEqual(values_for_option(command, "-b:v"), ["6800k"])
@@ -104,11 +112,82 @@ class MediaCommandsTests(unittest.TestCase):
 
     def test_extract_audio_preserves_paths_and_selects_audio(self):
         command = build_extract_audio_command(
-            "video file.mp4", "audio file.wav", ffmpeg_path="ffmpeg"
+            "video file.mp4",
+            "audio file.wav",
+            ffmpeg_path="ffmpeg",
+            platform_name="Windows",
+            channels=2,
+            rate=44100,
         )
         self.assertEqual(values_for_option(command, "-i"), ["video file.mp4"])
-        self.assertEqual(values_for_option(command, "-map"), ["a"])
+        self.assertEqual(values_for_option(command, "-map"), ["0:a:0"])
+        self.assertEqual(values_for_option(command, "-c:a"), ["pcm_s16le"])
+        self.assertEqual(values_for_option(command, "-ac"), ["2"])
+        self.assertEqual(values_for_option(command, "-ar"), ["44100"])
+        self.assertEqual(values_for_option(command, "-f"), ["wav"])
+        self.assertIn("-nostdin", command)
         self.assertEqual(command[-1], "audio file.wav")
+
+    def test_windows_stream_commands_use_current_ffmpeg_timing_options(self):
+        commands = [
+            build_camera_stream_command("Mic", "destination", platform_name="Windows"),
+            build_curtain_stream_command(
+                "-",
+                r"\\.\pipe\audio",
+                1280,
+                720,
+                2,
+                44100,
+                "destination",
+                platform_name="Windows",
+            ),
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(values_for_option(command, "-fps_mode"), ["cfr"])
+                self.assertEqual(values_for_option(command, "-flags"), ["+global_header"])
+                # Each input gets a small probe budget, before its own -i.
+                input_start = 1
+                for index, value in enumerate(command):
+                    if value == "-i":
+                        input_options = command[input_start:index]
+                        self.assertEqual(values_for_option(input_options, "-probesize"), ["32"])
+                        self.assertEqual(
+                            values_for_option(input_options, "-analyzeduration"), ["0"]
+                        )
+                        self.assertEqual(values_for_option(input_options, "-fpsprobesize"), ["0"])
+                        input_start = index + 2
+                for option in ("-vsync", "-async", "-copyts", "-use_wallclock_as_timestamps"):
+                    self.assertNotIn(option, command)
+
+    def test_windows_curtains_fix_output_canvas_to_even_dimensions(self):
+        command = build_curtain_stream_command(
+            "-", "audio", 321, 181, 2, 44100, "destination", platform_name="Windows"
+        )
+        video_filter = values_for_option(command, "-vf")[0]
+        self.assertIn("scale=322:182:", video_filter)
+        self.assertIn("pad=322:182:", video_filter)
+        self.assertIn("force_divisible_by=2", video_filter)
+        self.assertNotIn("-pixel_format", command)
+        with self.assertRaises(ValueError):
+            build_curtain_stream_command(
+                "-", "audio", 0, 720, 2, 44100, "destination", platform_name="Windows"
+            )
+
+    def test_macos_commands_keep_existing_options(self):
+        camera = build_camera_stream_command("Mic", "destination", platform_name="Darwin")
+        curtain = build_curtain_stream_command(
+            "-", "audio", 1280, 720, 2, 44100, "destination", platform_name="Darwin"
+        )
+        for command in (camera, curtain):
+            self.assertEqual(values_for_option(command, "-vsync"), ["cfr"])
+            self.assertIn("-copyts", command)
+            self.assertNotIn("-probesize", command)
+        self.assertEqual(values_for_option(camera, "-vf"), ["setpts=PTS+2/TB"])
+        self.assertEqual(values_for_option(curtain, "-s"), ["1280x720"])
+        extraction = build_extract_audio_command("clip.mp4", "audio.wav", platform_name="Darwin")
+        self.assertEqual(values_for_option(extraction, "-map"), ["a"])
+        self.assertEqual(values_for_option(extraction, "-q:a"), ["0"])
 
 
 class DeviceListTests(unittest.TestCase):

@@ -64,13 +64,44 @@ class StreamingSessionTests(unittest.TestCase):
         self.assertIs(frame, latest_frame)
         self.assertFalse(curtain_active)
 
-    def test_ffmpeg_errors_are_bounded_and_never_expose_stream_keys(self):
+    def test_ffmpeg_errors_are_reported_once_and_never_expose_stream_keys(self):
         for _ in range(20):
             self.session._handle_ffmpeg_output("Failed: rtmp://server/private-stream-key")
 
-        self.assertEqual(self.session.errors.qsize(), 10)
+        self.assertEqual(self.session.errors.qsize(), 1)
         while not self.session.errors.empty():
             self.assertNotIn("private-stream-key", self.session.errors.get_nowait())
+
+    def test_error_queue_stays_bounded(self):
+        for _ in range(20):
+            self.session._report_error("Capture failed")
+        self.assertEqual(self.session.errors.qsize(), 10)
+
+    def test_audio_cause_is_not_overwritten_by_ffmpeg_and_shutdown_errors(self):
+        self.session.start_stream(self.settings)
+        self.session._handle_audio_error("No se encontró el micrófono seleccionado.")
+        self.session._handle_ffmpeg_output("Error opening input: private-stream-key")
+        self.session._stop_failed_stream(self.streamer, "Revise la conexión y el audio.")
+
+        self.assertFalse(self.session.is_streaming)
+        self.assertTrue(self.session._audio_failed.is_set())
+        self.assertEqual(self.session.errors.qsize(), 1)
+        self.assertEqual(
+            self.session.errors.get_nowait(), "No se encontró el micrófono seleccionado."
+        )
+
+        self.session.start_stream(self.settings)
+        self.session._handle_audio_error("El micrófono se desconectó.")
+        self.assertEqual(self.session.errors.get_nowait(), "El micrófono se desconectó.")
+
+    def test_validation_identifies_the_missing_device_before_startup(self):
+        self.session.select_camera(None)
+        with self.assertRaisesRegex(ValueError, "dispositivo de video"):
+            self.session.start_stream(self.settings)
+        self.session.select_camera("0")
+        with self.assertRaisesRegex(ValueError, "dispositivo de audio"):
+            self.session.start_stream(StreamSettings("", self.settings.destinations))
+        self.streamer_class.assert_not_called()
 
     def test_curtain_audio_format_matches_command_and_resources_are_removed(self):
         self.session.select_curtain("clip.mp4")

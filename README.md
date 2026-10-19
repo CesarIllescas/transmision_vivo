@@ -24,7 +24,9 @@ En macOS, usar `.venv/bin/python` en lugar de `.venv\Scripts\python.exe`.
 - `pages/home_view.py`: controles de Flet y eventos de la interfaz. Cada vista
   posee su sesión; el montaje inicia la vista previa y el cierre libera recursos.
 - `media/session.py`: captura, estado de la transmisión y coordinación de recursos.
-- `media/audio.py`: micrófono y audio PCM de cortinillas mediante FIFO en macOS.
+- `media/audio.py`: selección entre micrófono y audio PCM de cortinillas.
+- `media/windows_pipe.py`: pipe nativo de Windows con conexión y escritura cancelables.
+- `media/curtain.py`: lectura del video según su duración y tasa de fotogramas.
 - `media/commands.py`: construcción de comandos y destinos FFmpeg sin ejecutarlos.
 - `media/devices.py` y `media/frames.py`: descubrimiento de dispositivos y fotogramas.
 - `classes/streamer.py`: ciclo de vida del proceso FFmpeg y lectura de diagnósticos.
@@ -50,21 +52,41 @@ repositorio y `Streamer` para facilitar una migración gradual.
 .\.venv\Scripts\ruff.exe format --check .
 ```
 
-Las pruebas usan SQLite temporal, controles reales de Flet y procesos/dispositivos
-simulados. No leen las claves guardadas ni realizan transmisiones.
+Las pruebas usan SQLite temporal, controles reales de Flet y dispositivos simulados.
+Con FFmpeg y FFprobe en `PATH`, también generan archivos locales para comprobar
+codificación, audio y sincronización. En Windows verifican pipes nativos y el cambio
+cámara → cortinilla → cámara dentro de un único proceso FFmpeg. No abren cámaras ni
+micrófonos físicos, leen claves guardadas ni envían contenido a servidores.
+
+## Cortinillas con audio en Windows
+
+1. Seleccionar cámara, micrófono y destinos de transmisión.
+2. Elegir un video que contenga audio y activar **Transmisión con cortinillas**.
+3. Iniciar la transmisión y alternar entre cámara y cortinilla con el control de escena.
+
+El audio del archivo se prepara como PCM estéreo de 44.1 kHz. Un pipe nativo de
+Windows permite alternarlo con el micrófono sin reiniciar FFmpeg. Durante la
+cortinilla se descartan las muestras del micrófono para evitar audio atrasado al
+volver a la cámara. Si el audio acaba antes que el video, se completa con silencio
+hasta reiniciar la cortinilla.
+
+La salida se compone a 30 fps; la cortinilla conserva su velocidad original y se
+repite según su duración. La imagen en vivo muestra los fotogramas de esa salida;
+la vista previa de la cortinilla está silenciada para evitar eco local. Los controles
+se bloquean mientras se prepara el inicio, que puede cancelarse cerrando la ventana.
 
 ## Pendientes de la fase de corrección de bugs
 
-- Validar captura y sincronización de audio/video con hardware y FFmpeg reales,
-  especialmente cortinillas con tasas de fotogramas diferentes de 30 fps.
+- Validar captura y sincronización con la cámara, micrófono y servidor RTMP del
+  entorno real. La validación automatizada de Windows usa fuentes sintéticas.
 - La opción X conserva el destino provisional original. Para un endpoint
   proporcionado por el servicio, usar la opción Otro.
 - Revisar la sintaxis de captura de audio AVFoundation sin cortinillas en macOS:
   se conservó el argumento original `audio=<dispositivo>`.
-- Las cortinillas siguen sin estar disponibles en Windows y no se añadió soporte
-  de captura para Linux.
+- La corrección y validación audiovisual de macOS quedan pendientes. No se añadió
+  soporte de captura para Linux.
 - Cambiar el archivo de cortinilla durante una transmisión requiere detenerla;
-  alternar entre la cámara y la cortinilla preparada sigue disponible en macOS.
+  alternar entre la cámara y la cortinilla preparada está disponible en Windows.
 
 La base de datos existente no fue modificada durante el refactor. Las pruebas
 automatizadas no sustituyen la comprobación audiovisual de una transmisión real.

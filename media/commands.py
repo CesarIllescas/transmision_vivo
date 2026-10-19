@@ -13,6 +13,10 @@ RTMP_URLS = {
     "X": "rtmp://X.com/",
 }
 
+# Both live inputs already declare their codec/rate; do not buffer seconds of media
+# merely to estimate those properties before opening the other pipe.
+WINDOWS_LIVE_PROBE_OPTIONS = ("-probesize", "32", "-analyzeduration", "0", "-fpsprobesize", "0")
+
 
 def get_ffmpeg_path(platform_name=None, bundle_path=None):
     """Resolve the bundled executable, falling back to FFmpeg on PATH."""
@@ -82,15 +86,45 @@ def build_stream_targets(destinations: Iterable[tuple[str, str]], custom_server:
 
 def build_camera_stream_command(audio_device, streams, *, platform_name=None, ffmpeg_path=None):
     """Encode JPEG frames from stdin and audio from the selected input device."""
+    platform_name = platform_name or platform.system()
+    probe_options = WINDOWS_LIVE_PROBE_OPTIONS if platform_name == "Windows" else ()
+    if platform_name == "Windows":
+        timing_options = [
+            "-fps_mode",
+            "cfr",
+            "-vf",
+            "scale=out_range=tv,pad=ceil(iw/2)*2:ceil(ih/2)*2,setsar=1",
+            "-color_range",
+            "tv",
+            "-af",
+            "asetpts=N/SR/TB",
+            "-flags",
+            "+global_header",
+        ]
+    else:
+        timing_options = [
+            "-vsync",
+            "cfr",
+            "-async",
+            "1",
+            "-use_wallclock_as_timestamps",
+            "1",
+            "-copyts",
+            "-start_at_zero",
+            "-vf",
+            "setpts=PTS+2/TB",
+        ]
     return [
         ffmpeg_path or get_ffmpeg_path(platform_name),
         "-y",
+        *(["-nostdin"] if platform_name == "Windows" else []),
         "-f",
         "image2pipe",
         "-vcodec",
         "mjpeg",
         "-framerate",
         "30",
+        *probe_options,
         "-i",
         "-",
         "-f",
@@ -99,6 +133,7 @@ def build_camera_stream_command(audio_device, streams, *, platform_name=None, ff
         "16384",
         "-rtbufsize",
         "100M",
+        *probe_options,
         "-i",
         f"audio={audio_device}",
         "-map",
@@ -125,16 +160,7 @@ def build_camera_stream_command(audio_device, streams, *, platform_name=None, ff
         "yuv420p",
         "-g",
         "60",
-        "-vsync",
-        "cfr",
-        "-async",
-        "1",
-        "-use_wallclock_as_timestamps",
-        "1",
-        "-copyts",
-        "-start_at_zero",
-        "-vf",
-        "setpts=PTS+2/TB",
+        *timing_options,
         "-f",
         "tee",
         streams,
@@ -142,24 +168,64 @@ def build_camera_stream_command(audio_device, streams, *, platform_name=None, ff
 
 
 def build_curtain_stream_command(
-    video_pipe, audio_pipe, width, height, channels, rate, streams, *, ffmpeg_path=None
+    video_pipe,
+    audio_pipe,
+    width,
+    height,
+    channels,
+    rate,
+    streams,
+    *,
+    ffmpeg_path=None,
+    platform_name=None,
 ):
     """Encode JPEG video and PCM audio; use ``-`` for video supplied on stdin."""
+    platform_name = platform_name or platform.system()
+    probe_options = WINDOWS_LIVE_PROBE_OPTIONS if platform_name == "Windows" else ()
+    if platform_name == "Windows":
+        if width <= 0 or height <= 0:
+            raise ValueError("Stream dimensions must be positive")
+        # H.264 yuv420p requires even dimensions. Pin the output canvas for both scenes.
+        width += width % 2
+        height += height % 2
+        video_options = []  # JPEG headers describe the actual input format and size.
+        timing_options = [
+            "-fps_mode",
+            "cfr",
+            "-vf",
+            (
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+                f"force_divisible_by=2:out_range=tv,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            ),
+            "-color_range",
+            "tv",
+        ]
+    else:
+        video_options = ["-pixel_format", "bgr24", "-s", f"{width}x{height}"]
+        timing_options = [
+            "-vsync",
+            "cfr",
+            "-async",
+            "1",
+            "-use_wallclock_as_timestamps",
+            "1",
+            "-copyts",
+        ]
     return [
-        ffmpeg_path or get_ffmpeg_path(),
+        ffmpeg_path or get_ffmpeg_path(platform_name),
         "-y",
+        *(["-nostdin"] if platform_name == "Windows" else []),
         "-f",
         "image2pipe",
         "-vcodec",
         "mjpeg",
-        "-pixel_format",
-        "bgr24",
-        "-s",
-        f"{width}x{height}",
+        *video_options,
         "-thread_queue_size",
         "4096",
         "-framerate",
         "30",
+        *probe_options,
         "-i",
         video_pipe,
         "-f",
@@ -170,6 +236,7 @@ def build_curtain_stream_command(
         str(rate),
         "-thread_queue_size",
         "4096",
+        *probe_options,
         "-i",
         audio_pipe,
         "-map",
@@ -194,13 +261,7 @@ def build_curtain_stream_command(
         "128k",
         "-pix_fmt",
         "yuv420p",
-        "-vsync",
-        "cfr",
-        "-async",
-        "1",
-        "-use_wallclock_as_timestamps",
-        "1",
-        "-copyts",
+        *timing_options,
         "-g",
         "60",
         "-flags",
@@ -211,10 +272,35 @@ def build_curtain_stream_command(
     ]
 
 
-def build_extract_audio_command(video_path, audio_path, *, ffmpeg_path=None):
-    """Extract a media file's audio using the application's original settings."""
+def build_extract_audio_command(
+    video_path, audio_path, *, ffmpeg_path=None, channels=None, rate=None, platform_name=None
+):
+    """Extract the first Windows audio track as PCM, optionally normalizing its format."""
+    platform_name = platform_name or platform.system()
+    audio_options = []
+    if channels is not None:
+        audio_options.extend(["-ac", str(channels)])
+    if rate is not None:
+        audio_options.extend(["-ar", str(rate)])
+    if platform_name == "Windows":
+        return [
+            ffmpeg_path or get_ffmpeg_path(platform_name),
+            "-y",
+            "-nostdin",
+            "-i",
+            video_path,
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "pcm_s16le",
+            *audio_options,
+            "-f",
+            "wav",
+            audio_path,
+        ]
     return [
-        ffmpeg_path or get_ffmpeg_path(),
+        ffmpeg_path or get_ffmpeg_path(platform_name),
         "-y",
         "-i",
         video_path,
@@ -222,5 +308,6 @@ def build_extract_audio_command(video_path, audio_path, *, ffmpeg_path=None):
         "0",
         "-map",
         "a",
+        *audio_options,
         audio_path,
     ]
