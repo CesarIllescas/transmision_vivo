@@ -1,9 +1,14 @@
-from pages.Router import Router, DataStrategyEnum
+"""Route registration for each application page."""
 
-from pages.home_view import HomeView
+import flet as ft
 
-router = Router(DataStrategyEnum.QUERY)
+from pages.Router import Router
 
-router.routes = {
-  "/": HomeView,
-}
+
+def create_router(page: ft.Page) -> Router:
+    """Build a router only after Flet provides the actual page."""
+    from pages.home_view import HomeView
+
+    router = Router(page)
+    router.set_route("/", HomeView)
+    return router

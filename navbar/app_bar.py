@@ -1,33 +1,17 @@
+"""Application menu construction."""
+
 import flet as ft
 
-def AppBar(page):
+MENU_LABELS = ("Archivo", "Editar", "Vista", "Perfil", "Herramientas")
 
-    AppBar = ft.MenuBar(
-      style=ft.MenuStyle(
-        alignment=ft.alignment.top_left,
-        mouse_cursor={ft.MaterialState.HOVERED: ft.MouseCursor.WAIT,
-                       ft.MaterialState.DEFAULT: ft.MouseCursor.ZOOM_OUT},
-      ),
-      controls=[
-        ft.SubmenuButton(
-          content=ft.Text("Archivo"),
-        ),
-        ft.SubmenuButton(
-          content=ft.Text("Editar"),
-        ),
-        ft.SubmenuButton(
-          content=ft.Text("Vista"),
-        ),
-        ft.SubmenuButton(
-          content=ft.Text("Perfil"),
-        ),
-        ft.SubmenuButton(
-          content=ft.Text("Herramientas"),
-          controls=[
-            
-          ]
-        ),
-      ]
+
+def create_app_bar(page: ft.Page) -> ft.MenuBar:
+    """Build the application menu; page is reserved for menu actions."""
+    return ft.MenuBar(
+        style=ft.MenuStyle(alignment=ft.alignment.top_left),
+        controls=[ft.SubmenuButton(content=ft.Text(label)) for label in MENU_LABELS],
     )
 
-    return AppBar
+
+# Preserve the original factory name for callers outside this project.
+AppBar = create_app_bar

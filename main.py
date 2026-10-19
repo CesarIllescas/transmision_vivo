@@ -1,20 +1,24 @@
-import flet as ft
-from pages.navigation import router
-from navbar.app_bar import AppBar
+"""Entry point for the desktop live streaming application."""
 
-def main(page: ft.Page):
-    page.theme_mode = "dark"
-    page.title = "SICOM Studio"
-    # page.appbar = AppBar(page)
+import flet as ft
+
+from pages.navigation import create_router
+
+
+def main(page: ft.Page) -> None:
+    """Configure a page and mount its navigation container once."""
+    page.theme_mode = ft.ThemeMode.DARK
+    page.title = "Transmisión en Vivo"
+
+    router = create_router(page)
     page.on_route_change = router.route_change
-    #page.window_full_screen = True
-    router.page = page
-    # page.on_media_change = lambda: print(page.media)
-    page.add(
-        router.body
-    )
-    
-    page.go('/')
-    page.window_close = lambda: print("Window closed")
-    
-ft.app(target=main, assets_dir="assets")
+    page.add(router.body)
+    page.go("/")
+
+
+def run() -> None:
+    ft.app(target=main, assets_dir="assets")
+
+
+if __name__ == "__main__":
+    run()
